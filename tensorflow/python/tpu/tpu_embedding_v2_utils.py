@@ -1021,7 +1021,7 @@ class TableConfig:
       optimizer: An optional instance of an optimizer parameters class, instance
         of one of `tf.tpu.experimental.embedding.SGD`,
         `tf.tpu.experimental.embedding.Adagrad` or
-        `tf.tpu.experimental.embedding.Adam`. It set will override the global
+        `tf.tpu.experimental.embedding.Adam`. If set will override the global
         optimizer passed to `tf.tpu.experimental.embedding.TPUEmbedding`.
       combiner: A string specifying how to reduce if there are multiple entries
         in a single row. Currently 'mean', 'sqrtn', 'sum' are supported, with
@@ -1129,7 +1129,7 @@ class TableConfig:
     # Use optimizer to handle the rest of the parameters.
     self.optimizer._set_optimization_parameters(parameters)  # pylint: disable=protected-access
     if self.quantization_config:
-      self.quantization_config._set_quantization_parameters(parameters)  # pylint: disable=protected-access
+      self.quantization_config._set_optimization_parameters(parameters)  # pylint: disable=protected-access
 
 
 @tf_export("tpu.experimental.embedding.FeatureConfig")

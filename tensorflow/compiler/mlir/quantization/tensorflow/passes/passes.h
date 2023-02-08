@@ -16,9 +16,13 @@ limitations under the License.
 #ifndef TENSORFLOW_COMPILER_MLIR_QUANTIZATION_TENSORFLOW_PASSES_PASSES_H_
 #define TENSORFLOW_COMPILER_MLIR_QUANTIZATION_TENSORFLOW_PASSES_PASSES_H_
 
+#include <memory>
+#include <string>
+
 #include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
 #include "mlir/IR/BuiltinOps.h"  // from @llvm-project
 #include "mlir/Pass/Pass.h"  // from @llvm-project
+#include "mlir/Support/LLVM.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/lite/quantization/quantization_config.h"
 #include "tensorflow/compiler/mlir/quantization/tensorflow/passes/utils.h"
 
@@ -72,7 +76,8 @@ CreateInsertCustomAggregationOpsPass();
 std::unique_ptr<OperationPass<ModuleOp>> CreateQuantizeCompositeFunctionsPass(
     tensorflow::quantization::QuantizationMethod::ExperimentalMethod
         quantization_method,
-    OpSet target_opset, bool enable_per_channel_quantization);
+    OpSet target_opset, bool enable_per_channel_quantization,
+    int min_num_elements_for_weights);
 
 // Converts dequantize-(quantizable) call-quantize pattern to a single call op
 // that has quantized input and output types. It is expected for this pass to
@@ -88,6 +93,7 @@ std::unique_ptr<OperationPass<func::FuncOp>> CreateQuantizePass(
 // Creates an instance of the PrepareQuantize pass, which will perform similar
 // transformations as TFL::PrepareQuantizePass.
 std::unique_ptr<OperationPass<func::FuncOp>> CreatePrepareQuantizePass(
+    const QuantizationSpecs& quant_specs,
     tensorflow::quantization::QuantizationMethod::ExperimentalMethod
         quantization_method);
 
@@ -144,6 +150,30 @@ CreateDuplicateShapeDeterminingConstantsPass();
 // tf.AssignVariableOp(tf.VarHandleOp, tf.Const) patterns in the initializer
 // function and replaces tf.Consts with the results of RestoreV2.
 std::unique_ptr<OperationPass<ModuleOp>> CreateInsertRestoreOpPass();
+
+// Creates a pass that creates a new function that wraps the newly created
+// SaveV2 op. The new function's name is "tf_quant__save". The function accepts
+// a single string tensor as argument, which specifies the path to the
+// checkpoint to which the variable's tensor values are saved. It finds
+// `tf.AssignVariableOp(tf.VarHandleOp, tf.Const)` pattern in the initializer
+// function of type "restore_op" to identify the VarHandleOps that should be
+// saved using the SaveV2 op.
+std::unique_ptr<OperationPass<ModuleOp>> CreateInsertSaveOpPass();
+
+// Creates a pass that marks functions with the attribute `tf._noinline = true`
+// to avoid being inlined by the `InlinerPass`. `noinline_functions` is the name
+// of the functions to mark.
+std::unique_ptr<OperationPass<func::FuncOp>> CreateMarkFunctionsNoinlinePass(
+    ArrayRef<std::string> noinline_functions);
+
+// Removes `tf.AssignVariableOp(tf.VarHandleOp, tf.Const)` patterns from the
+// initializer function (type = "restore_op").
+// Note: initializing values (`tf.Const`s) will be removed and this may result
+// in an information loss and uninitialized variables eventually. Make sure that
+// this effect is desired (e.g. there is a `tf.RestoreV2Op` that restores the
+// variables instead).
+std::unique_ptr<OperationPass<ModuleOp>>
+CreateRemoveVariableInitializationByConstPass();
 
 }  // namespace quant
 }  // namespace mlir

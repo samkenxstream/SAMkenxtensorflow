@@ -192,7 +192,9 @@ cc_library(
         "dtensor_allreduce_sum_optimization.cc",
         "dtensor_mixed_precision_reduce.cc",
         "dtensor_mlir_passes.cc",
-        "dtensor_xla_spmd_integration.cc",
+        "dtensor_remove_dtensorlayout.cc",
+        "dtensor_replace_auxiliary_layout_op.cc",
+        "dtensor_set_hlo_sharding.cc",
         "function_renaming.cc",
         "handle_cross_cluster_dependencies.cc",
         "handle_sparsetensors.cc",
@@ -308,7 +310,6 @@ tf_cc_test(
     srcs = ["group_assignment_test.cc"],
     deps = [
         ":group_assignment",
-        "//tensorflow/compiler/xla/stream_executor/lib",
         "//tensorflow/core:lib",
         "//tensorflow/core:test",
         "//tensorflow/core:test_main",
@@ -328,7 +329,6 @@ cc_library(
     deps = [
         ":tf_dtensor_dialect",
         "//tensorflow/compiler/mlir/tensorflow",
-        "//tensorflow/compiler/xla/stream_executor/lib",
         "//tensorflow/core:lib",
         "//tensorflow/dtensor/cc:constants",
         "//tensorflow/dtensor/cc:dstatus",

@@ -21,7 +21,6 @@ limitations under the License.
 #include "tensorflow/c/experimental/stream_executor/stream_executor.h"
 #include "tensorflow/c/tf_status_helper.h"
 #include "tensorflow/compiler/xla/stream_executor/executor_cache.h"
-#include "tensorflow/compiler/xla/stream_executor/lib/status.h"
 #include "tensorflow/compiler/xla/stream_executor/platform.h"
 
 namespace stream_executor {
@@ -70,14 +69,14 @@ class CPlatform : public Platform {
   }
   bool UseBfcAllocator() const { return platform_.use_bfc_allocator; }
   bool ForceMemoryGrowth() const { return platform_.force_memory_growth; }
-  port::StatusOr<std::unique_ptr<DeviceDescription>> DescriptionForDevice(
+  tsl::StatusOr<std::unique_ptr<DeviceDescription>> DescriptionForDevice(
       int ordinal) const override;
-  port::StatusOr<StreamExecutor*> ExecutorForDevice(int ordinal) override;
-  port::StatusOr<StreamExecutor*> ExecutorForDeviceWithPluginConfig(
+  tsl::StatusOr<StreamExecutor*> ExecutorForDevice(int ordinal) override;
+  tsl::StatusOr<StreamExecutor*> ExecutorForDeviceWithPluginConfig(
       int ordinal, const PluginConfig& plugin_config) override;
-  port::StatusOr<StreamExecutor*> GetExecutor(
+  tsl::StatusOr<StreamExecutor*> GetExecutor(
       const StreamExecutorConfig& config) override;
-  port::StatusOr<std::unique_ptr<StreamExecutor>> GetUncachedExecutor(
+  tsl::StatusOr<std::unique_ptr<StreamExecutor>> GetUncachedExecutor(
       const StreamExecutorConfig& config) override;
 
   // Trace listener is not supported

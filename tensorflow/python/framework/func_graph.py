@@ -164,8 +164,6 @@ class FuncGraph(ops.Graph):
       or the global default Graph.
     captures: Maps external tensor -> internal tensor (i.e. input placeholder).
       The entries are in the order they were captured.
-    control_captures: Set of external ops on which this graph has a control
-      dependency.
     seed: The graph-level random seed.
     capture_by_value: If True, the func graph will capture Variables by value
       instead of reference.
@@ -205,7 +203,6 @@ class FuncGraph(ops.Graph):
     self.inputs = []
     self.outputs = []
     self.control_outputs = []
-    self.control_captures = object_identity.ObjectIdentitySet()
     self.structured_input_signature = structured_input_signature
     self.structured_outputs = structured_outputs
     self._resource_tensor_inputs = object_identity.ObjectIdentitySet()
@@ -367,18 +364,12 @@ class FuncGraph(ops.Graph):
     if key is None:
       key = object()
     if key not in self._deferred_captures:
+      trace_ctx = trace_type.InternalTracingContext(True)
+      spec = trace_type.from_value(spec, trace_ctx)
 
       if placeholder is None:
-
-        def convert_to_placeholder(s):
-          if not isinstance(s, tensor_spec.DenseSpec):
-            raise TypeError(
-                "Expected a nest of `TypeSpec` objects, found %s of type %s." %
-                (s, type(s)))
-          return array_ops.placeholder(dtype=s.dtype, shape=s.shape)
-
-        placeholder = nest.map_structure(
-            convert_to_placeholder, spec, expand_composites=True)
+        placeholder_ctx = trace_type.InternalPlaceholderContext(self)
+        placeholder = spec.placeholder_value(placeholder_ctx)
 
       def wrapped_closure():
 
@@ -402,16 +393,6 @@ class FuncGraph(ops.Graph):
           assert isinstance(
               graph,
               FuncGraph), "This API should only be used in TF2 enviroment."
-          # In the case of control flow, we need to capture the
-          # external_captures (deferred or not) of the body_graph (i.e.
-          # `WhileBodyFuncGraph) in `cond_graph` (i.e. WhileCondFuncGraph) and
-          # create the corresponding placeholders in `cond_graph` so that it
-          # expects to receive these as arguments. However, doing so requires
-          # having evaluated the call_time_value already (and maybe repeatedly),
-          # so we skip adding deferred_captures to the control flow graph but
-          # add it to its outer graph.
-          while graph.is_control_flow_graph:
-            graph = graph.outer_graph
 
           with graph.as_default():
             ret_nest = graph.capture_call_time_value(
@@ -419,17 +400,8 @@ class FuncGraph(ops.Graph):
         else:
           ret_nest = closure()
 
-        nest.assert_same_structure(spec, ret_nest, expand_composites=True)
-        # This uses the tensor dtype defined in `spec` when converting values
-        # in `ret_nest` to tensors.
-        # pylint: disable=protected-access
-        y = nest.map_structure(
-            lambda s, r: s._to_components(r),
-            spec,
-            ret_nest,
-            expand_composites=False)
-        # pylint: enable=protected-access
-        return nest.flatten(y, expand_composites=True)
+        ret_nest = spec._cast(ret_nest, trace_type.InternalCastContext)  # pylint: disable=protected-access
+        return spec._to_tensors(ret_nest)  # pylint: disable=protected-access
 
       wrapped_closure.output_spec = spec
       self._deferred_captures[key] = (wrapped_closure, placeholder)
@@ -470,7 +442,7 @@ class FuncGraph(ops.Graph):
         graph_element = c
       if graph_element is not None and getattr(graph_element, "graph",
                                                None) is not self:
-        self.control_captures.add(graph_element)
+        self._function_captures.control.add(graph_element)
       else:
         filtered_control_inputs.append(graph_element)
     return super().control_dependencies(filtered_control_inputs)

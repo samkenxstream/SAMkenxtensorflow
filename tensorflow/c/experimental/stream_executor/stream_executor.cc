@@ -22,7 +22,9 @@ limitations under the License.
 #include "tensorflow/c/experimental/stream_executor/stream_executor.h"
 
 #include <string>
+#include <utility>
 
+#include "absl/functional/any_invocable.h"
 #include "tensorflow/c/c_api_macros.h"
 #include "tensorflow/c/c_api_macros_internal.h"
 #include "tensorflow/c/experimental/stream_executor/stream_executor_internal.h"
@@ -193,7 +195,7 @@ DeviceMemoryBase DeviceMemoryBaseFromC(const SP_DeviceMemoryBase& mem) {
 
 // Wrapper that allows passing std::function across C API.
 struct HostCallbackContext {
-  std::function<tsl::Status()> callback;
+  absl::AnyInvocable<tsl::Status() &&> callback;
 };
 
 // This wrapper allows calling `HostCallbackContext::callback` across C API.
@@ -201,7 +203,7 @@ struct HostCallbackContext {
 // `callback_fn` to `host_callback` in `SP_StreamExecutor`.
 void HostCallbackTrampoline(void* ctx, TF_Status* status) {
   HostCallbackContext* host_ctx = static_cast<HostCallbackContext*>(ctx);
-  tsl::Status s = host_ctx->callback();
+  tsl::Status s = std::move(host_ctx->callback)();
   Set_TF_Status_from_Status(status, s);
   delete host_ctx;
 }
@@ -314,12 +316,12 @@ class CStreamExecutor : public internal::StreamExecutorInterface {
                                  uint64 size) override {
     // TODO(annarev): figure out if we should support memzero/memset
     // functionality by allocating on host and then copying to device.
-    return port::UnimplementedError(
+    return tsl::errors::Unimplemented(
         "SynchronousMemZero is not supported by pluggable device.");
   }
   tsl::Status SynchronousMemSet(DeviceMemoryBase* location, int value,
                                 uint64 size) override {
-    return port::UnimplementedError(
+    return tsl::errors::Unimplemented(
         "SynchronousMemSet is not supported by pluggable device.");
   }
   tsl::Status SynchronousMemcpy(DeviceMemoryBase* gpu_dst, const void* host_src,
@@ -423,10 +425,10 @@ class CStreamExecutor : public internal::StreamExecutorInterface {
     return true;
   }
   bool HostCallback(Stream* stream,
-                    std::function<tsl::Status()> callback) override {
+                    absl::AnyInvocable<tsl::Status() &&> callback) override {
     SP_Stream stream_handle =
         static_cast<CStream*>(stream->implementation())->Handle();
-    HostCallbackContext* ctx = new HostCallbackContext{callback};
+    HostCallbackContext* ctx = new HostCallbackContext{std::move(callback)};
     return stream_executor_->host_callback(&device_, stream_handle,
                                            &HostCallbackTrampoline, ctx);
   }
@@ -571,7 +573,7 @@ class CStreamExecutor : public internal::StreamExecutorInterface {
   }
   int PlatformDeviceCount() override { return visible_device_count_; }
   tsl::Status EnablePeerAccessTo(StreamExecutorInterface* other) override {
-    return port::UnimplementedError(
+    return tsl::errors::Unimplemented(
         "EnablePeerAccessTo is not supported by pluggable device.");
   }
   bool CanEnablePeerAccessTo(StreamExecutorInterface* other) override {
@@ -586,7 +588,7 @@ class CStreamExecutor : public internal::StreamExecutorInterface {
 
   // Creates a new DeviceDescription object.
   // Ownership is transferred to the caller.
-  port::StatusOr<std::unique_ptr<DeviceDescription>> CreateDeviceDescription()
+  tsl::StatusOr<std::unique_ptr<DeviceDescription>> CreateDeviceDescription()
       const override {
     OwnedTFStatus c_status(TF_NewStatus());
 
@@ -678,7 +680,7 @@ CPlatform::~CPlatform() {
   destroy_platform_fns_(&platform_fns_);
 }
 
-port::StatusOr<std::unique_ptr<DeviceDescription>>
+tsl::StatusOr<std::unique_ptr<DeviceDescription>>
 CPlatform::DescriptionForDevice(int ordinal) const {
   // TODO(annarev): see if we can get StreamExecutor instance
   // and call GetDeviceDescription. executor_cache_.Get would need
@@ -687,24 +689,24 @@ CPlatform::DescriptionForDevice(int ordinal) const {
   builder.set_name(name_);
   return builder.Build();
 }
-port::StatusOr<StreamExecutor*> CPlatform::ExecutorForDevice(int ordinal) {
+tsl::StatusOr<StreamExecutor*> CPlatform::ExecutorForDevice(int ordinal) {
   stream_executor::StreamExecutorConfig config;
   config.ordinal = ordinal;
   return GetExecutor(config);
 }
-port::StatusOr<StreamExecutor*> CPlatform::ExecutorForDeviceWithPluginConfig(
+tsl::StatusOr<StreamExecutor*> CPlatform::ExecutorForDeviceWithPluginConfig(
     int ordinal, const PluginConfig& plugin_config) {
   StreamExecutorConfig config;
   config.ordinal = ordinal;
   config.plugin_config = plugin_config;
   return GetExecutor(config);
 }
-port::StatusOr<StreamExecutor*> CPlatform::GetExecutor(
+tsl::StatusOr<StreamExecutor*> CPlatform::GetExecutor(
     const StreamExecutorConfig& config) {
   return executor_cache_.GetOrCreate(
       config, [&]() { return GetUncachedExecutor(config); });
 }
-port::StatusOr<std::unique_ptr<StreamExecutor>> CPlatform::GetUncachedExecutor(
+tsl::StatusOr<std::unique_ptr<StreamExecutor>> CPlatform::GetUncachedExecutor(
     const StreamExecutorConfig& config) {
   // Fill device creation params
   SE_CreateDeviceParams device_params{SE_CREATE_DEVICE_PARAMS_STRUCT_SIZE};
@@ -802,7 +804,7 @@ tsl::Status InitStreamExecutorPlugin(SEInitPluginFn init_fn,
           std::move(platform), params.destroy_platform, std::move(platform_fns),
           params.destroy_platform_fns, std::move(device_fns), std::move(se),
           std::move(timer_fns)));
-  SE_CHECK_OK(stream_executor::MultiPlatformManager::RegisterPlatform(
+  TF_CHECK_OK(stream_executor::MultiPlatformManager::RegisterPlatform(
       std::move(cplatform)));
   // TODO(annarev): Return `use_bfc_allocator` value in some way so that it is
   // available in `PluggableDeviceProcessState` once the latter is checked in.

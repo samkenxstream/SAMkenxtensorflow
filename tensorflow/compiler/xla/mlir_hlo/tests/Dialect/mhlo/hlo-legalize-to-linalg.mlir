@@ -233,19 +233,13 @@ func.func @complex_rsqrt(%operand: tensor<2x2xcomplex<f32>>)
 func.func @float_cbrt(%operand: tensor<2x2xf32>) -> tensor<2x2xf32> {
   %tensor_result = "mhlo.cbrt"(%operand)
       : (tensor<2x2xf32>) -> tensor<2x2xf32>
-  // CHECK: %[[THIRD:.+]] = arith.constant 0.333333343
   // CHECK: ^{{[a-z0-9_]*}}
   // CHECK-SAME: %[[IN:[a-zA-Z0-9_]*]]: f32
-  // CHECK-SAME: %[[OUT:[a-zA-Z0-9_]*]]: f32
-  // CHECK: %[[ABS:.+]] = math.absf %[[IN]]
-  // CHECK: %[[POW:.+]] = math.powf %[[ABS]], %[[THIRD]]
-  // CHECK: %[[RESULT:.+]] = math.copysign %[[POW]], %[[IN]]
+  // CHECK: %[[RESULT:.+]] = math.cbrt %[[IN]]
   // CHECK: linalg.yield %[[RESULT]]
 
   // CHECK-PRIMITIVE: linalg.map
-  // CHECK-PRIMITIVE: math.absf
-  // CHECK-PRIMITIVE: math.powf
-  // CHECK-PRIMITIVE: math.copysign
+  // CHECK-PRIMITIVE: math.cbrt
   func.return %tensor_result : tensor<2x2xf32>
 }
 
@@ -1141,6 +1135,18 @@ func.func @transpose_dynamic(%arg0: tensor<?x?x9x?xi32>) -> tensor<?x?x?x9xi32> 
 // CHECK-PRIMITIVE-SAME: outs(%[[INIT]] : tensor<?x?x?x9xi32>)
 // CHECK-PRIMITIVE-SAME: permutation = [1, 0, 3, 2]
 // CHECK-PRIMITIVE-SAME: {someattr}
+
+func.func @transpose_unsigned(%arg0: tensor<2x2xui32>) -> tensor<2x2xui32> {
+  %0 = "mhlo.transpose"(%arg0) {
+    permutation = dense<[1, 0]> : tensor<2xi64>,
+    result_layout = dense<[0, 1]> : tensor<2xindex>
+  } : (tensor<2x2xui32>) -> tensor<2x2xui32>
+  return %0 : tensor<2x2xui32>
+}
+
+// Regression test. Just check that unsigned ints lower successfully.
+// CHECK-LABEL: func @transpose_unsigned
+// CHECK-PRIMITIVE-LABEL: func @transpose_unsigned
 
 // -----
 

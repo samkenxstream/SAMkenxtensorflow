@@ -262,7 +262,7 @@ class _EagerDefinedFunction(object):
     self._num_outputs = len(signature.output_arg)
     self._output_types = [o.type for o in signature.output_arg]
     self._output_shapes = [o.shape for o in outputs]
-    self._control_captures = graph.control_captures
+    self._control_captures = graph._function_captures.control  # pylint: disable=protected-access
     # Shallow copy outputs since ConcreteFunction may mutate it.
     self._func_graph_outputs = list(outputs)
     self.grad_func_name = None
@@ -1401,12 +1401,15 @@ class ConcreteFunction(core.ConcreteFunction, trackable.Trackable):
         kwonlydefaults=dict(
             (k, function_spec.BOUND_VALUE) for k in kwarg_specs),
         annotations=spec.fullargspec.annotations)
-    self._function_spec = function_spec.FunctionSpec(
-        fullargspec,
-        spec.is_method,
-        spec.input_signature,
-        spec.is_pure,
-        name=self._func_graph.name)
+    self._function_spec = (
+        function_spec.FunctionSpec.from_fullargspec_and_signature(
+            fullargspec,
+            spec.is_method,
+            spec.input_signature,
+            spec.is_pure,
+            name=self._func_graph.name,
+        )
+    )
 
   @property
   def variables(self):

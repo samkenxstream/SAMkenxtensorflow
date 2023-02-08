@@ -2120,7 +2120,22 @@ Model::Model()
   model_gauge_cell_->Set(
       [this, my_safe_to_collect_metrics = this->safe_to_collect_metrics_]() {
         mutex_lock l(my_safe_to_collect_metrics->mu);
-        return my_safe_to_collect_metrics->val ? DebugString() : std::string();
+        if (!my_safe_to_collect_metrics->val) {
+          return std::string();
+        }
+        {
+          tf_shared_lock snapshot_lock(mu_);
+          if (snapshot_ != nullptr) {
+            ModelProto model_proto;
+            Status s = ModelToProtoHelper(snapshot_, &model_proto);
+            if (s.ok()) {
+              *model_proto.mutable_optimization_params() = optimization_params_;
+              return model_proto.DebugString();
+            }
+            LOG(WARNING) << s.error_message();
+          }
+        }
+        return DebugString();
       });
 }
 
@@ -2208,6 +2223,13 @@ void Model::Optimize(AutotuneAlgorithm algorithm, int64_t cpu_budget,
   }
   if (experiment_ == "autotune_buffer_optimization") {
     OptimizeBuffers(snapshot, optimization_params.ram_budget());
+  }
+  {
+    // Save the snapshot of the model proto including the parameters used by
+    // autotune. This will be used as the model proto returned in `tfstreamz`.
+    mutex_lock l(mu_);
+    snapshot_ = snapshot;
+    optimization_params_ = optimization_params;
   }
 }
 
@@ -2853,7 +2875,8 @@ void ModelTiming::ComputePipelineRatios(const Node::NodeVector& bfs_nodes) {
       parent_pipeline_ratio = output_timing.pipeline_ratio;
       if (node->num_elements() > 0 && node->output()->num_elements() > 0) {
         parent_ratio = static_cast<double>(node->num_elements()) /
-                       static_cast<double>(node->output()->num_elements());
+                       static_cast<double>(node->output()->num_elements() +
+                                           node->output()->buffered_elements());
       } else {
         parent_ratio = node->output()->Ratio();
       }
@@ -2888,9 +2911,10 @@ void ModelTiming::ComputeNonAsyncInterleaveManyTotalTime(const Node& node) {
     // dynamic quantity should closely match the static one for nodes other than
     // interleave nodes and is more generic since its value is specific to an
     // input to output pair rather than a single numnber for the output node.
-    input_total_time_nsec += timing_nodes_[input.get()].total_time_nsec *
-                             static_cast<double>(input->num_elements()) /
-                             static_cast<double>(node.num_elements());
+    input_total_time_nsec +=
+        timing_nodes_[input.get()].total_time_nsec *
+        static_cast<double>(input->num_elements()) /
+        static_cast<double>(node.num_elements() + node.buffered_elements());
   }
   node_timing.total_time_nsec =
       node_timing.self_time_nsec + input_total_time_nsec;
@@ -3000,7 +3024,8 @@ double ModelTiming::ComputeAsyncInterleaveManyFirstInputTotalTime(
       << "Input " << (*first_input)->long_name() << " of node "
       << node.long_name() << " has no timing node.";
   return timing_nodes_[(*first_input).get()].total_time_nsec *
-         (*first_input)->num_elements() / node.num_elements();
+         (*first_input)->num_elements() /
+         (node.num_elements() + node.buffered_elements());
 }
 
 void ModelTiming::ComputeTotalTimes(const Node::NodeVector& reverse_bfs_nodes) {

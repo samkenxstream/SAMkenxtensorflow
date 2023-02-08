@@ -37,6 +37,7 @@ limitations under the License.
 #include "tensorflow/compiler/mlir/lite/flatbuffer_export.h"
 #include "tensorflow/compiler/mlir/lite/metrics/error_collector_inst.h"
 #include "tensorflow/compiler/mlir/lite/quantization/quantization_config.h"
+#include "tensorflow/compiler/mlir/lite/stablehlo/serializer/flatbuffer_export.h"
 #include "tensorflow/compiler/mlir/lite/stablehlo/transforms/op_stat_pass.h"
 #include "tensorflow/compiler/mlir/lite/stablehlo/transforms/stablehlo_tfl_pass.h"
 #include "tensorflow/compiler/mlir/lite/stablehlo/transforms/transforms.h"
@@ -51,12 +52,12 @@ limitations under the License.
 #include "tensorflow/compiler/mlir/tensorflow/transforms/tf_saved_model_passes.h"
 #include "tensorflow/compiler/mlir/tensorflow/translate/tf_mlir_translate.h"
 #include "tensorflow/compiler/mlir/tensorflow/utils/error_util.h"
-#include "tensorflow/compiler/xla/stream_executor/lib/statusor.h"
 #include "tensorflow/core/framework/op.h"
 #include "tensorflow/core/framework/op_def.pb.h"
 #include "tensorflow/core/framework/types.pb.h"
 #include "tensorflow/lite/tools/optimize/quantize_weights.h"
 #include "tensorflow/lite/tools/optimize/reduced_precision_support.h"
+#include "tensorflow/tsl/platform/statusor.h"
 
 namespace tensorflow {
 namespace {
@@ -246,18 +247,8 @@ Status ConvertTFExecutorToStablehloFlatbuffer(
     return statusHandler.ConsumeStatus();
   }
 
-  // Convert StableHLO MLIR to TFLite Custom Op MLIR
-  pass_manager.addNestedPass<mlir::func::FuncOp>(
-      mlir::odml::CreateStablehloToTflPass());
-  if (failed(pass_manager.run(module))) {
-    return statusHandler.ConsumeStatus();
-  }
-
-  // Write TFLite Custom Op MLIR to Flatbuffer
-  // TODO(b/260112687): will serialize StableHLO to Flatbuffer directly
-  tflite::FlatbufferExportOptions options;
-  options.toco_flags.set_allow_custom_ops(true);
-  if (!tflite::MlirToFlatBufferTranslateFunction(module, options, result)) {
+  mlir::odml::FlatbufferExportOptions options;
+  if (!mlir::odml::MlirToFlatBufferTranslateFunction(module, options, result)) {
     return statusHandler.ConsumeStatus();
   }
 

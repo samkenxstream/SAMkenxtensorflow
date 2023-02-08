@@ -98,7 +98,6 @@ void CreateTfJitRtPipeline(OpPassManager& pm,
   pm.addPass(mlir::TF::CreateTFFunctionalControlFlowToRegions());
 
   // Transform TF operation to HLO.
-  pm.addPass(mlir::mhlo::createLegalizeTFControlFlowPass());
   pm.addNestedPass<FuncOp>(mlir::mhlo::createLegalizeTFPass());
 
   if (options.legalize_i1_tensors) {
@@ -121,9 +120,9 @@ void CreateTfJitRtPipeline(OpPassManager& pm,
   pm.addPass(mlir::createCSEPass());
   pm.addPass(mlir::createCanonicalizerPass());
 
-  // Group reduction and parallel dimensions of reduction operations and realize
-  // them through equivalent 1D or 2D reductions, if possible.
   pm.addNestedPass<FuncOp>(mlir::mhlo::createGroupReductionDimensionsPass());
+  pm.addNestedPass<mlir::func::FuncOp>(
+      mlir::mhlo::createHloCanonicalizeScatterPass());
 
   // Also, try to simplify reshape operations.
   pm.addNestedPass<FuncOp>(mlir::mhlo::createSymbolicShapeOptimizationPass());
@@ -132,6 +131,11 @@ void CreateTfJitRtPipeline(OpPassManager& pm,
   pm.addNestedPass<FuncOp>(mlir::mhlo::createLegalizeControlFlowPass());
   pm.addNestedPass<mlir::func::FuncOp>(mlir::mhlo::createLegalizeSortPass());
   pm.addNestedPass<FuncOp>(xla::cpu::createLegalizeCollectiveOpsPass());
+
+  if (options.vectorize) {
+    pm.addNestedPass<mlir::func::FuncOp>(
+        mlir::mhlo::createLegalizeMHLOToTHLOPass());
+  }
   pm.addNestedPass<FuncOp>(mlir::mhlo::createLegalizeHloToLinalgPass(
       /*enablePrimitiveOps=*/options.vectorize));
   pm.addPass(mlir::mhlo::createLegalizeToArithmeticPass());
@@ -171,7 +175,7 @@ void CreateTfJitRtPipeline(OpPassManager& pm,
     gml_st_opts.matmulTileSizes = options.matmul_tile_sizes;
     gml_st_opts.lowerToMmt4d = options.lower_to_mmt4d;
 
-    mlir::gml_st::addTileableOpsTransformationsForCPU(pm, gml_st_opts);
+    mlir::gml_st::addCPUTilingPipeline(pm, gml_st_opts);
   } else {
     pm.addNestedPass<FuncOp>(CreateFusionPass());
   }
@@ -210,14 +214,14 @@ void CreateTfJitRtPipeline(OpPassManager& pm,
   pm.addPass(mlir::createCSEPass());
   pm.addPass(mlir::createCanonicalizerPass());
 
-  if (options.vectorize)
-    pm.addNestedPass<FuncOp>(CreateLowerVectorTransposePass());
+  pm.addNestedPass<FuncOp>(mlir::gml_st::createRewriteVectorTransposePass());
 
   mlir::VectorTransferToSCFOptions vec_to_scf_options;
   vec_to_scf_options.unroll = true;
   pm.addNestedPass<FuncOp>(
       mlir::createConvertVectorToSCFPass(vec_to_scf_options));
-  pm.addNestedPass<FuncOp>(createRewriteVectorMultiReductionPass());
+  pm.addNestedPass<FuncOp>(
+      mlir::gml_st::createRewriteVectorMultiReductionPass());
 
   pm.addNestedPass<FuncOp>(CreateMathApproximationPass({"all"}));
 }
