@@ -15,6 +15,7 @@
 """Tracing Compiler implementation."""
 
 import collections
+import contextlib
 import threading
 import types as types_lib
 from typing import List
@@ -24,18 +25,21 @@ from tensorflow.core.function import trace_type
 from tensorflow.core.function.capture import capture_container
 from tensorflow.core.function.polymorphism import function_cache
 from tensorflow.core.function.polymorphism import function_type as function_type_lib
+from tensorflow.python.autograph.core import converter
+from tensorflow.python.autograph.impl import api
 from tensorflow.python.eager import monitoring
 from tensorflow.python.eager.polymorphic_function import attributes as attributes_lib
 from tensorflow.python.eager.polymorphic_function import function_context
 from tensorflow.python.eager.polymorphic_function import function_spec
 from tensorflow.python.eager.polymorphic_function import monomorphic_function
+from tensorflow.python.eager.polymorphic_function import tf_method_target
 from tensorflow.python.framework import func_graph as func_graph_module
+from tensorflow.python.framework import ops
 from tensorflow.python.platform import tf_logging as logging
 from tensorflow.python.profiler import trace
 from tensorflow.python.util import compat
 from tensorflow.python.util import lazy_loader
 from tensorflow.python.util import tf_decorator
-from tensorflow.python.util import tf_inspect
 
 # Loaded lazily due to a circular dependency (roughly
 # tf.function->autograph->->dataset->tf.function).
@@ -47,6 +51,45 @@ ag_ctx = lazy_loader.LazyLoader(
 _graph_building_time_counter = monitoring.Counter(
     "/tensorflow/core/tf_function/graph_building_time_usecs",
     "Time for tf.function to build a graph (us).")
+
+
+def _py_func_from_autograph(
+    python_func,
+    autograph_options=None,
+):
+  """Compile a python function using autograph, for use with FuncGraph.
+
+  Args:
+    python_func: the Python function to compile.
+    autograph_options: additional knobs to control when `autograph=True`.
+      See https://www.tensorflow.org/guide/autograph for more information.
+  Returns:
+    python_func, converted using autograph.
+  """
+  _, original_func = tf_decorator.unwrap(python_func)
+
+  def autograph_handler(*args, **kwargs):
+    """Calls a converted version of original_func."""
+    try:
+      return api.converted_call(
+          original_func,
+          args,
+          kwargs,
+          options=converter.ConversionOptions(
+              recursive=True,
+              optional_features=autograph_options,
+              user_requested=True,
+          ))
+    except Exception as e:  # pylint:disable=broad-except
+      if hasattr(e, "ag_error_metadata"):
+        raise e.ag_error_metadata.to_exception(e)
+      else:
+        raise
+
+  # Wrapping around a decorator allows checks like tf_inspect.getargspec
+  # to be accurate.
+  converted_func = tf_decorator.make_decorator(original_func, autograph_handler)
+  return tf_decorator.rewrap(python_func, original_func, converted_func)
 
 
 # TODO(fmuham): Revamp the API of this class to be 100% compiler-focused.
@@ -108,8 +151,11 @@ class TracingCompiler:
     """
     self._python_function = python_function
     pure_function = attributes and attributes_lib.IMPLEMENTS in attributes
-    self._function_spec = function_spec.FunctionSpec.from_function_and_signature(
-        python_function, input_signature, is_pure=pure_function)
+    self._function_spec = (
+        function_spec.FunctionSpec.from_function_and_signature(
+            python_function, input_signature, is_pure=pure_function
+        )
+    )
     self._name = name
     self._autograph = autograph
     self._autograph_options = autograph_options
@@ -296,6 +342,10 @@ class TracingCompiler:
     else:
       arg_names = base_arg_names
 
+    if self._autograph:
+      self._python_function = _py_func_from_autograph(
+          self._python_function, self._autograph_options)
+
     concrete_function = monomorphic_function.ConcreteFunction(
         func_graph_module.func_graph_from_py_func(
             self._name,
@@ -304,8 +354,6 @@ class TracingCompiler:
             kwargs,
             None,
             func_graph=func_graph,
-            autograph=self._autograph,
-            autograph_options=self._autograph_options,
             arg_names=arg_names,
             capture_by_value=self._capture_by_value,
             create_placeholders=False),
@@ -360,7 +408,11 @@ class TracingCompiler:
     if concrete_function is not None:
       return concrete_function, filtered_flat_args
 
-    with monitoring.MonitoredTimer(_graph_building_time_counter.get_cell()):
+    # Use a timer for graph building only if not already inside a function. This
+    # avoids double counting graph building time for nested functions.
+    with monitoring.MonitoredTimer(
+        _graph_building_time_counter.get_cell()
+    ) if not ops.inside_function() else contextlib.nullcontext():
       with trace.Trace("tf.function-graph_building"):
         logging.vlog(
             1, "Creating new FuncGraph for Python function %r (key: %r, %r)",
@@ -386,65 +438,27 @@ class TracingCompiler:
           with func_graph.as_default():
             placeholder_bound_args = target_func_type.placeholder_arguments(
                 placeholder_context)
-          if self.function_spec.is_method:
-            # TODO(fmuham): canonicalize_function_inputs removes self arg.
-            args = placeholder_bound_args.args[1:]
-          else:
-            args = placeholder_bound_args.args
+          args = placeholder_bound_args.args
           kwargs = placeholder_bound_args.kwargs
 
           concrete_function = self._create_concrete_function(
               args, kwargs, func_graph)
 
           # TODO(b/263520817): Remove access to private attribute.
-          graph_capture_container = concrete_function.graph._function_captures  # pylint: disable=protected-access
+          graph_capture_container = concrete_function.graph.function_captures
           # Maintain the list of all captures
           self._func_captures.merge_by_ref_with(graph_capture_container)
           # Get current active captures snapshot
           captures = graph_capture_container.get_by_ref_snapshot()
 
           # Create a cache_key with args and captures
-          traced_func_deletion_observer = lookup_func_context.deletion_observer
           traced_func_type = _insert_capture_type(
               target_func_type, captures, lookup_func_context)
 
           self._function_cache.add(current_func_context, traced_func_type,
-                                   traced_func_deletion_observer,
                                    concrete_function)
 
           return concrete_function, filtered_flat_args
-
-
-# When a method is bound to objects of this type, it allows AutoGraph to
-# recover a weak reference the original method's self pointer, so that it can
-# execute it consistent with class_method_to_instance_method's
-# bound_method_wrapper.
-# TODO(b/119246461): This is not pretty. Use a descriptor instead?
-class TfMethodTarget:
-  """Binding target for methods replaced by function and defun."""
-
-  __slots__ = ("weakrefself_target__", "weakrefself_func__")
-
-  def __init__(self, target, original_python_function):
-    self.weakrefself_target__ = target
-    self.weakrefself_func__ = weakref.ref(original_python_function)
-
-  @property
-  def target(self):
-    return self.weakrefself_target__()
-
-  @property
-  def target_class(self):
-    true_self = self.weakrefself_target__()
-    if tf_inspect.isclass(true_self):
-      # Class method
-      return true_self
-    else:
-      return true_self.__class__
-
-  def call(self, args, kwargs):
-    wrapped_fn = self.weakrefself_func__()
-    return wrapped_fn(self.weakrefself_target__(), *args, **kwargs)
 
 
 def class_method_to_instance_method(original_function, instance):
@@ -455,7 +469,8 @@ def class_method_to_instance_method(original_function, instance):
   # bound method to be unhashable.
   bound_method = types_lib.MethodType(
       original_function.python_function,
-      TfMethodTarget(weak_instance, original_function.python_function))
+      tf_method_target.TfMethodTarget(weak_instance,
+                                      original_function.python_function))
 
   # original_function is expected to be either `TracingCompiler` or
   # def_function.Function

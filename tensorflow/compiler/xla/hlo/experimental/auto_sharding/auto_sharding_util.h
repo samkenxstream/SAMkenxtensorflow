@@ -522,7 +522,8 @@ AliasSet BuildAliasSet(const HloModule* module,
 template <typename T>
 Array<T> Transpose(const Array<T> array, std::vector<int64_t> axes) {
   // Computes transposed array's size.
-  std::vector<int64_t> transposed_array_dimensions(array.dimensions());
+  std::vector<int64_t> transposed_array_dimensions(array.dimensions().begin(),
+                                                   array.dimensions().end());
   for (size_t i = 0; i < axes.size(); i++) {
     transposed_array_dimensions[i] = array.dimensions()[axes[i]];
   }
@@ -538,11 +539,11 @@ Array<T> Transpose(const Array<T> array, std::vector<int64_t> axes) {
 }
 
 // Used to determine whether a sharding or mesh shape is 1D, 2D, or 3D.
-size_t VectorGreaterThanOneElementCount(const std::vector<int64_t>& vector,
+size_t VectorGreaterThanOneElementCount(absl::Span<const int64_t> span,
                                         bool omit_last_dim = false);
 
 std::vector<int64_t> VectorGreaterThanOneElementIndices(
-    const std::vector<int64_t>& vector, bool omit_last_dim = false);
+    absl::Span<const int64_t> span, bool omit_last_dim = false);
 
 int64_t GetInstructionSize(const Shape& shape);
 
@@ -581,6 +582,12 @@ bool OutputInputSameShapes(const HloInstruction* ins);
 
 bool IsEntryComputationInputOrOutput(const HloModule* module,
                                      const HloInstruction* ins);
+
+// Given a number of devices (`num_devices`), create a list different mesh
+// shapes of a given rank (`num_mesh_dims`) to try, if the option to try
+// multiple mesh shapes is enabled.
+std::vector<std::vector<int64_t>> CreateDifferentMeshShapesToTry(
+    int64_t num_devices, int num_mesh_dims, bool symmetrical_mesh_dims);
 }  // namespace spmd
 }  // namespace xla
 

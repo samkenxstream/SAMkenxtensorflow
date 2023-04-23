@@ -83,6 +83,19 @@ TEST(FloatArray, TestFloatArrayCreate) {
   TfLiteFloatArrayFree(b);
 }
 
+TEST(FloatArray, TestFloatArrayCopy) {
+  TfLiteFloatArray* a = TfLiteFloatArrayCreate(2);
+  a->data[0] = 22.0;
+  a->data[1] = 24.0;
+  TfLiteFloatArray* b = TfLiteFloatArrayCopy(a);
+  ASSERT_NE(a, b);
+  ASSERT_EQ(a->size, b->size);
+  ASSERT_EQ(a->data[0], b->data[0]);
+  ASSERT_EQ(a->data[1], b->data[1]);
+  TfLiteFloatArrayFree(a);
+  TfLiteFloatArrayFree(b);
+}
+
 TEST(Types, TestTypeNames) {
   auto type_name = [](TfLiteType t) {
     return std::string(TfLiteTypeGetName(t));
@@ -398,13 +411,10 @@ TEST(TestTfLiteOpaqueDelegate,
   auto* opaque_delegate =
       reinterpret_cast<TfLiteOpaqueDelegate*>(&non_opaque_delegate);
 
-  // The accessor returns 'nullptr', because the 'data' field inside the opaque
-  // delegate builder was not set.  Note that we deliberately don't fall back
-  // to returning the 'TfLiteDelegate's 'data_' field.  The fact that the
-  // 'TfLiteDelegate' is the internal representation of the
-  // 'TfLiteOpaqueDelegate' is an implementation detail that could
-  // theoretically change in the future.
-  EXPECT_EQ(nullptr, TfLiteOpaqueDelegateGetData(opaque_delegate));
+  // The accessor returns '&delegate_data', because the
+  // 'opaque_delegate_builder' field inside the delegate was not set so it falls
+  // back to returning the data_ field of TfLiteDelegate.
+  EXPECT_EQ(&delegate_data, TfLiteOpaqueDelegateGetData(opaque_delegate));
 }
 
 TEST(TestTfLiteOpaqueDelegate, GetData_NoDataSetViaOpaqueDelegateBuilder) {

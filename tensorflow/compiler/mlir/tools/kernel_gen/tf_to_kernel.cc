@@ -29,9 +29,10 @@
 #include "llvm/IR/Module.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/CommandLine.h"
-#include "llvm/Support/Host.h"
+#include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Target/TargetMachine.h"
+#include "llvm/TargetParser/Host.h"
 #include "mlir/ExecutionEngine/OptUtils.h"  // from @llvm-project
 #include "mlir/Pass/PassManager.h"  // from @llvm-project
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"  // from @llvm-project
@@ -117,6 +118,9 @@ Status Run(llvm::StringRef input_file, llvm::StringRef output_file,
 
   // Compile.
   mlir::MLIRContext context;
+  llvm::SourceMgr source_mgr;
+  mlir::SourceMgrDiagnosticHandler source_mgr_handler(source_mgr, &context);
+
   TF_ASSIGN_OR_RETURN(
       mlir::OwningOpRef<mlir::ModuleOp> module,
       GenerateKernelForTfCode(context, tf_code, architectures, tile_sizes,

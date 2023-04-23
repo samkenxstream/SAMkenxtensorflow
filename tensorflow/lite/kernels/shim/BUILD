@@ -91,8 +91,8 @@ tf_cc_test(
     srcs = ["tf_tensor_view_test.cc"],
     deps = [
         ":tf_tensor_view",
-        "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/strings",
+        "@com_google_googletest//:gtest_main",
     ] + if_mobile([
         "//tensorflow/core:portable_tensorflow_lib_lite",
     ]) + if_not_mobile([
@@ -127,7 +127,7 @@ cc_test(
         ":tflite_tensor_view",
         "//tensorflow/lite:framework",
         "//tensorflow/lite:string_util",
-        "//tensorflow/lite/core:headers",
+        "//tensorflow/lite/core:framework_stable",
         "@com_google_googletest//:gtest_main",
     ],
 )
@@ -217,7 +217,7 @@ cc_test(
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings",
         "@com_google_googletest//:gtest_main",
-        "@flatbuffers//:public_headers_lib",
+        "@flatbuffers",
     ],
 )
 
@@ -248,8 +248,8 @@ cc_test(
     srcs = ["test_util_test.cc"],
     deps = [
         ":test_util",
-        "//tensorflow/lite:cc_api",
-        "//tensorflow/lite/core:headers",
+        "//tensorflow/lite:cc_api_experimental",
+        "//tensorflow/lite/core:framework_stable",
         "@com_google_googletest//:gtest_main",
     ],
 )

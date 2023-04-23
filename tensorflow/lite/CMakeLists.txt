@@ -143,7 +143,7 @@ find_package(absl REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(farmhash REQUIRED)
 find_package(fft2d REQUIRED)
-find_package(Flatbuffers REQUIRED)
+find_package(FlatBuffers REQUIRED)
 find_package(gemmlowp REQUIRED)
 find_package(NEON_2_SSE REQUIRED)
 find_package(cpuinfo REQUIRED)  #CPUINFO is used by XNNPACK and RUY library
@@ -218,6 +218,9 @@ if(CMAKE_SYSTEM_NAME MATCHES "Windows")
 endif()
 if(CMAKE_SYSTEM_NAME MATCHES "Android")
   find_library(ANDROID_LOG_LIB log)
+  list(APPEND TFLITE_TARGET_DEPENDENCIES
+    log
+  )
 endif()
 # Build a list of source files to compile into the TF Lite library.
 populate_tflite_source_vars("." TFLITE_SRCS)
@@ -237,15 +240,22 @@ if(_TFLITE_ENABLE_MMAP)
 else()
   list(FILTER TFLITE_SRCS EXCLUDE REGEX ".*mmap_allocation\\.cc$")
 endif()
-if(NOT "${CMAKE_SYSTEM_NAME}" STREQUAL "Android")
-  list(FILTER TFLITE_SRCS EXCLUDE REGEX ".*minimal_logging_android\\.cc$")
+
+# Handle TFLite logging source.
+list(FILTER TFLITE_SRCS EXCLUDE REGEX ".*minimal_logging_.*\\.cc$")
+if("${CMAKE_SYSTEM_NAME}" STREQUAL "Android")
+  list(APPEND TFLITE_SRCS ${TFLITE_SOURCE_DIR}/minimal_logging_android.cc)
+elseif("${CMAKE_SYSTEM_NAME}" STREQUAL "iOS")
+  list(APPEND TFLITE_SRCS ${TFLITE_SOURCE_DIR}/minimal_logging_ios.cc)
+else()
+  list(APPEND TFLITE_SRCS ${TFLITE_SOURCE_DIR}/minimal_logging_default.cc)
 endif()
-if(NOT "${CMAKE_SYSTEM_NAME}" STREQUAL "iOS")
-  list(FILTER TFLITE_SRCS EXCLUDE REGEX ".*minimal_logging_ios\\.cc$")
-endif()
+
 populate_tflite_source_vars("core" TFLITE_CORE_SRCS)
+populate_tflite_source_vars("core/acceleration/configuration" TFLITE_CORE_ACCELERATION_SRCS)
 populate_tflite_source_vars("core/api" TFLITE_CORE_API_SRCS)
 populate_tflite_source_vars("core/async" TFLITE_CORE_ASYNC_SRCS)
+populate_tflite_source_vars("core/async/c" TFLITE_CORE_ASYNC_C_SRCS)
 populate_tflite_source_vars("core/c" TFLITE_CORE_C_SRCS)
 populate_tflite_source_vars("core/experimental/acceleration/configuration" TFLITE_CORE_EXPERIMENTAL_SRCS)
 populate_tflite_source_vars("core/kernels" TFLITE_CORE_KERNELS_SRCS)
@@ -494,6 +504,7 @@ set(TFLITE_PROFILER_SRCS
   ${TFLITE_SOURCE_DIR}/profiling/root_profiler.h
   ${TFLITE_SOURCE_DIR}/profiling/root_profiler.cc
   ${TFLITE_SOURCE_DIR}/profiling/telemetry/profiler.cc
+  ${TFLITE_SOURCE_DIR}/profiling/telemetry/telemetry.cc
 )
 if(CMAKE_SYSTEM_NAME MATCHES "Android")
   list(APPEND TFLITE_PROFILER_SRCS
@@ -504,16 +515,19 @@ elseif(CMAKE_SYSTEM_NAME MATCHES "iOS")
   list(APPEND TFLITE_PROFILER_SRCS
     ${TFLITE_SOURCE_DIR}/profiling/signpost_profiler.mm
   )
+  set_source_files_properties(${TFLITE_SOURCE_DIR}/profiling/signpost_profiler.mm PROPERTIES COMPILE_FLAGS -fno-objc-arc)
 endif()
 
 # TFLite library
 set(_ALL_TFLITE_SRCS
+  ${TFLITE_CORE_ACCELERATION_SRCS}
   ${TFLITE_CORE_API_SRCS}
   ${TFLITE_CORE_C_SRCS}
   ${TFLITE_CORE_EXPERIMENTAL_SRCS}
   ${TFLITE_CORE_KERNELS_SRCS}
   ${TFLITE_CORE_SRCS}
   ${TFLITE_CORE_ASYNC_SRCS}
+  ${TFLITE_CORE_ASYNC_C_SRCS}
   ${TFLITE_CORE_TOOLS_SRCS}
   ${TFLITE_C_SRCS}
   ${TFLITE_DELEGATES_FLEX_SRCS}
@@ -550,6 +564,7 @@ set(_ALL_TFLITE_HDRS ${_ALL_TFLITE_SRCS})
 list(FILTER _ALL_TFLITE_HDRS INCLUDE REGEX ".*\\.h$")
 target_include_directories(tensorflow-lite
   PUBLIC $<BUILD_INTERFACE:${TENSORFLOW_SOURCE_DIR}> $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+  ${CMAKE_BINARY_DIR}/gemmlowp
 )
 target_link_libraries(tensorflow-lite
   PUBLIC
@@ -564,7 +579,6 @@ target_link_libraries(tensorflow-lite
     farmhash
     fft2d_fftsg2d
     flatbuffers::flatbuffers
-    gemmlowp
     ruy::ruy
     pthreadpool
     ${CMAKE_DL_LIBS}

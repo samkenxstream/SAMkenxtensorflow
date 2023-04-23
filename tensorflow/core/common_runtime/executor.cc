@@ -21,6 +21,7 @@ limitations under the License.
 #include <vector>
 
 #include "absl/memory/memory.h"
+#include "absl/strings/str_join.h"
 #include "absl/time/time.h"
 #include "absl/types/optional.h"
 #include "tensorflow/core/activity_watcher/activity.h"
@@ -809,6 +810,18 @@ void ExecutorState<PropagatorStateType>::ProcessInline(
                       {"step_id", absl::StrCat(params.step_id)},
                       {"node_id", absl::StrCat(id)},
                       {"device", device->name()},
+                      {"inputs",
+                       absl::StrJoin(item.kernel->def().input(), "; ")},
+                      {"original_node_names",
+                       absl::StrJoin(item.kernel->def()
+                                         .experimental_debug_info()
+                                         .original_node_names(),
+                                     "; ")},
+                      {"original_func_names",
+                       absl::StrJoin(item.kernel->def()
+                                         .experimental_debug_info()
+                                         .original_func_names(),
+                                     "; ")},
                   });
             },
             /*level=*/2);
@@ -1047,15 +1060,15 @@ Status ExecutorState<PropagatorStateType>::ProcessOutputs(
     }
     if (s.code() == error::RESOURCE_EXHAUSTED) {
       if (stats_collector_) {
-        string err = stats_collector_->ReportAllocsOnResourceExhausted(
-            s.error_message());
-        s = errors::CreateWithUpdatedMessage(
-            s, strings::StrCat(s.error_message(), err));
+        string err =
+            stats_collector_->ReportAllocsOnResourceExhausted(s.message());
+        s = errors::CreateWithUpdatedMessage(s,
+                                             strings::StrCat(s.message(), err));
       } else {
         s = errors::CreateWithUpdatedMessage(
             s,
             strings::StrCat(
-                s.error_message(),
+                s.message(),
                 "\nHint: If you want to see a list of allocated tensors when "
                 "OOM happens, add report_tensor_allocations_upon_oom "
                 "to RunOptions for current allocation info. This isn't "

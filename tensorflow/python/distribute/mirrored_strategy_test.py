@@ -29,7 +29,6 @@ from tensorflow.python.distribute import cross_device_ops as cross_device_ops_li
 from tensorflow.python.distribute import device_util
 from tensorflow.python.distribute import distribute_lib
 from tensorflow.python.distribute import distribute_utils
-from tensorflow.python.distribute import distribution_strategy_context as ds_context
 from tensorflow.python.distribute import mirrored_strategy
 from tensorflow.python.distribute import multi_worker_test_base
 from tensorflow.python.distribute import reduce_util
@@ -49,12 +48,13 @@ from tensorflow.python.framework import func_graph
 from tensorflow.python.framework import ops
 from tensorflow.python.framework import tensor_shape
 from tensorflow.python.framework import tensor_util
+from tensorflow.python.framework import test_util as util
 from tensorflow.python.ops import array_ops
-from tensorflow.python.ops import control_flow_ops
 from tensorflow.python.ops import gradients
 from tensorflow.python.ops import math_ops
 from tensorflow.python.ops import variable_scope
 from tensorflow.python.ops import variables
+from tensorflow.python.ops import while_loop
 from tensorflow.python.training import server_lib
 from tensorflow.python.util import traceback_utils
 
@@ -315,9 +315,16 @@ class MirroredCollectiveOpTest(strategy_test_lib.DistributionTestBase,
     @def_function.function
     def fn():
       strategy = mirrored_strategy.MirroredStrategy(["CPU:0", "CPU:1"])
-      self.assertEqual(
-          strategy.extended._collective_ops._options.implementation,
-          collective_util.CommunicationImplementation.RING)
+      if ops.executing_eagerly_outside_functions():
+        self.assertIsInstance(
+            strategy.extended._collective_ops,
+            cross_device_ops_lib.CollectiveAllReduce)
+        self.assertEqual(
+            strategy.extended._collective_ops._options.implementation,
+            collective_util.CommunicationImplementation.RING)
+      else:
+        self.assertIsInstance(strategy.extended._collective_ops,
+                              cross_device_ops_lib.ReductionToOneDevice)
     fn()
 
   def testMixedDevices(self):
@@ -333,15 +340,19 @@ class MirroredCollectiveOpTest(strategy_test_lib.DistributionTestBase,
     @def_function.function
     def fn():
       strategy = mirrored_strategy.MirroredStrategy(["GPU:0", "GPU:1"])
+      self.assertIsInstance(
+          strategy.extended._collective_ops,
+          cross_device_ops_lib.CollectiveAllReduce)
       self.assertEqual(
           strategy.extended._collective_ops._options.implementation,
           collective_util.CommunicationImplementation.NCCL)
     fn()
 
   def testVirtualGpu(self):
-    physical_gpus = context.context().list_physical_devices(device_type="GPU")
     # Logical devices cannot be changed after context initialization.
     context._reset_context()
+
+    physical_gpus = context.context().list_physical_devices(device_type="GPU")
     context.context().set_logical_device_configuration(physical_gpus[1], [
         context.LogicalDeviceConfiguration(memory_limit=1024),
         context.LogicalDeviceConfiguration(memory_limit=1024)
@@ -349,10 +360,141 @@ class MirroredCollectiveOpTest(strategy_test_lib.DistributionTestBase,
     @def_function.function
     def fn():
       strategy = mirrored_strategy.MirroredStrategy(["GPU:0", "GPU:1", "GPU:2"])
-      self.assertEqual(
-          strategy.extended._collective_ops._options.implementation,
-          collective_util.CommunicationImplementation.RING)
+      if ops.executing_eagerly_outside_functions():
+        self.assertIsInstance(
+            strategy.extended._collective_ops,
+            cross_device_ops_lib.CollectiveAllReduce)
+        self.assertEqual(
+            strategy.extended._collective_ops._options.implementation,
+            collective_util.CommunicationImplementation.RING)
+      else:
+        self.assertEqual(strategy.extended._collective_ops,
+                         cross_device_ops_lib.ReductionToOneDevice)
     fn()
+
+
+@combinations.generate(
+    combinations.combine(
+        mode=["graph", "eager"], required_gpus=[2], use_default=[True, False]))
+class MirroredGetCrossDeviceOpTest(
+    strategy_test_lib.DistributionTestBase,
+    strategy_test_lib.TwoDeviceDistributionTestBase, parameterized.TestCase):
+
+  def tearDown(self):
+    super().tearDown()
+    context._reset_context()
+
+  def testGpusCollectiveOp(self, use_default):
+
+    @def_function.function(jit_compile=util.is_xla_enabled())
+    def fn(var, use_default):
+
+      if use_default or util.is_xla_enabled():
+        self.assertIsInstance(
+            strategy.extended._get_cross_device_ops(var),
+            cross_device_ops_lib.CollectiveAllReduce)
+      else:
+        self.assertIsInstance(
+            strategy.extended._get_cross_device_ops(var),
+            cross_device_ops_lib.NcclAllReduce)
+
+    strategy = mirrored_strategy.MirroredStrategy(
+        ["GPU:0", "GPU:1"],
+        cross_device_ops=None
+        if use_default else cross_device_ops_lib.NcclAllReduce())
+    with strategy.scope():
+      var = variables.Variable(1.)
+
+    fn(var, use_default)
+
+  def testVirtualGpusCollectiveOp(self, use_default):
+    # Logical devices cannot be changed after context initialization.
+    context._reset_context()
+
+    physical_gpus = context.context().list_physical_devices(device_type="GPU")
+    context.context().set_logical_device_configuration(physical_gpus[1], [
+        context.LogicalDeviceConfiguration(memory_limit=1024),
+        context.LogicalDeviceConfiguration(memory_limit=1024)
+    ])
+
+    @def_function.function(jit_compile=util.is_xla_enabled())
+    def fn(var, use_default):
+
+      if use_default or util.is_xla_enabled():
+        self.assertIsInstance(
+            strategy.extended._get_cross_device_ops(var),
+            cross_device_ops_lib.CollectiveAllReduce)
+        self.assertEqual(
+            strategy.extended._get_cross_device_ops(
+                var)._options.implementation,
+            collective_util.CommunicationImplementation.RING)
+      else:
+        self.assertIsInstance(
+            strategy.extended._get_cross_device_ops(var),
+            cross_device_ops_lib.NcclAllReduce)
+
+    strategy = mirrored_strategy.MirroredStrategy(
+        ["GPU:0", "GPU:1", "GPU:2"],
+        cross_device_ops=None
+        if use_default else cross_device_ops_lib.NcclAllReduce())
+
+    with strategy.scope():
+      var = variables.Variable(1.)
+
+    fn(var, use_default)
+
+  def testCpusCollectiveOp(self, use_default):
+    del use_default
+    if util.is_xla_enabled():
+      self.skipTest("Only expected to run under non-XLA context.")
+
+    @def_function.function(jit_compile=True)
+    def fn(var):
+
+      if not ops.executing_eagerly_outside_functions():
+        self.assertIsInstance(
+            strategy.extended._get_cross_device_ops(var),
+            cross_device_ops_lib.ReductionToOneDevice)
+      else:
+        self.assertIsInstance(
+            strategy.extended._get_cross_device_ops(var),
+            cross_device_ops_lib.CollectiveAllReduce)
+
+    strategy = mirrored_strategy.MirroredStrategy(["CPU:0", "CPU:1"])
+    with strategy.scope():
+      var = variables.Variable(1.)
+
+    fn(var)
+
+  def testMixedDevicesCollectiveOp(self, use_default):
+    del use_default
+    if util.is_xla_enabled():
+      self.skipTest("All devices should be identical in XLA context.")
+
+    # XLA is not supported if devices are not of the same type.
+    strategy = mirrored_strategy.MirroredStrategy(["CPU:0", "GPU:0"])
+    with strategy.scope():
+      var = variables.Variable(1.)
+
+    self.assertIsInstance(
+        strategy.extended._get_cross_device_ops(var),
+        cross_device_ops_lib.ReductionToOneDevice)
+
+  def testMirroredStrategyInt32VariableCollectiveOp(self, use_default):
+    if util.is_xla_enabled():
+      self.skipTest("Only expected to run under non-XLA context.")
+
+    strategy = mirrored_strategy.MirroredStrategy(
+        ["GPU:0", "GPU:1"],
+        cross_device_ops=None
+        if use_default else cross_device_ops_lib.NcclAllReduce())
+    with strategy.scope():
+      # CollevtiveOp does not support int32 on GPU.
+      var = variables.Variable(1)
+
+    self.assertIsInstance(
+        strategy.extended._get_cross_device_ops(var),
+        cross_device_ops_lib.ReductionToOneDevice)
 
 
 def one_device_combinations():
@@ -425,7 +567,7 @@ class MirroredStrategyVariableCreatorStackTest(
         v = variable_scope.variable(1.0)
 
         # This will pause the current thread, and execute the other thread.
-        ds_context.get_replica_context().merge_call(lambda _: _)
+        distribute_lib.get_replica_context().merge_call(lambda _: _)
       return v
 
     def main_thread_creator(next_creator, **kwargs):
@@ -476,7 +618,7 @@ class MirroredStrategyCallForEachReplicaTest(test.TestCase):
     @def_function.function
     def model_fn():
       traces.append(1)
-      return ds_context.get_replica_context().replica_id_in_sync_group
+      return distribute_lib.get_replica_context().replica_id_in_sync_group
 
     with distribution.scope():
       result = distribution.extended.call_for_each_replica(model_fn)
@@ -490,7 +632,7 @@ class MirroredStrategyCallForEachReplicaTest(test.TestCase):
     @def_function.function
     def model_fn():
       traces.append(1)
-      return ds_context.get_replica_context().replica_id_in_sync_group
+      return distribute_lib.get_replica_context().replica_id_in_sync_group
 
     @def_function.function
     def step():
@@ -513,9 +655,10 @@ class MirroredStrategyCallForEachReplicaTest(test.TestCase):
     def model_fn():
 
       def body_fn(i):
-        return ds_context.get_replica_context().merge_call(merge_fn, args=(i,))
+        return distribute_lib.get_replica_context().merge_call(
+            merge_fn, args=(i,))
 
-      return control_flow_ops.while_loop_v2(lambda i: i < 2, body_fn, [0])
+      return while_loop.while_loop_v2(lambda i: i < 2, body_fn, [0])
 
     with distribution.scope():
       with self.assertRaisesRegex(
@@ -532,7 +675,8 @@ class MirroredStrategyCallForEachReplicaTest(test.TestCase):
       @def_function.function
       def model_fn_nested():
         t = constant_op.constant(1)
-        return ds_context.get_replica_context().merge_call(merge_fn, args=(t,))
+        return distribute_lib.get_replica_context().merge_call(
+            merge_fn, args=(t,))
 
       return model_fn_nested()
 
@@ -547,7 +691,7 @@ class MirroredStrategyCallForEachReplicaTest(test.TestCase):
 
     @def_function.function
     def model_fn():
-      ds_context.get_replica_context().merge_call(merge_fn)
+      distribute_lib.get_replica_context().merge_call(merge_fn)
       return 0.
 
     with distribution.scope():
@@ -590,7 +734,7 @@ class MirroredStrategyNameScopeTest(test.TestCase):
     def model_fn():
       with ops.name_scope("foo"):
         a = constant_op.constant(1.0, name="a")
-        ds_context.get_replica_context().merge_call(lambda _: _)
+        distribute_lib.get_replica_context().merge_call(lambda _: _)
         b = constant_op.constant(1.0, name="b")
       return a, b
 
@@ -608,7 +752,7 @@ class MirroredStrategyNameScopeTest(test.TestCase):
     def model_fn():
       with ops.name_scope(None, "foo"):
         a = constant_op.constant(1.0, name="a")
-        ds_context.get_replica_context().merge_call(lambda _: _)
+        distribute_lib.get_replica_context().merge_call(lambda _: _)
         b = constant_op.constant(2.0, name="b")
       return a, b
 
@@ -634,7 +778,7 @@ class MirroredStrategyNameScopeTest(test.TestCase):
     def model_fn():
       b = variable_scope.variable(1.0, name="b")
       with ops.name_scope("foo"):
-        c = ds_context.get_replica_context().merge_call(in_cross_replica)
+        c = distribute_lib.get_replica_context().merge_call(in_cross_replica)
       return b, c
 
     with context.graph_mode(), distribution.scope():
@@ -663,7 +807,7 @@ class MirroredStrategyNameScopeTest(test.TestCase):
     def model_fn():
       b = variable_scope.get_variable("b", [1])
       with ops.name_scope("foo"):
-        c = ds_context.get_replica_context().merge_call(in_cross_replica)
+        c = distribute_lib.get_replica_context().merge_call(in_cross_replica)
       return b, c
 
     with context.graph_mode(), distribution.scope():
@@ -693,7 +837,7 @@ class MirroredStrategyNameScopeTest(test.TestCase):
     def model_fn():
       b = variable_scope.get_variable("b", [1])
       with variable_scope.variable_scope("foo"):
-        c = ds_context.get_replica_context().merge_call(in_cross_replica)
+        c = distribute_lib.get_replica_context().merge_call(in_cross_replica)
       return b, c
 
     with context.graph_mode(), distribution.scope():
@@ -733,7 +877,7 @@ class MirroredThreeDeviceDistributionTest(
   def testThreeDevices(self, distribution):
     def model_fn():
       v = variable_scope.variable(1.0, name="foo")
-      ds_context.get_replica_context().merge_call(lambda _: _)
+      distribute_lib.get_replica_context().merge_call(lambda _: _)
       return v
 
     with distribution.scope():
@@ -823,7 +967,7 @@ class MirroredVariableUpdateTest(test.TestCase):
 
       def model_fn():
         value = math_ops.cast(
-            ds_context.get_replica_context().replica_id_in_sync_group,
+            distribute_lib.get_replica_context().replica_id_in_sync_group,
             mirrored_var.dtype)
         return mirrored_var.assign(value)
 
@@ -904,7 +1048,7 @@ class MirroredVariableUpdateTest(test.TestCase):
 
       def model_fn():
         value = math_ops.cast(
-            ds_context.get_replica_context().replica_id_in_sync_group,
+            distribute_lib.get_replica_context().replica_id_in_sync_group,
             mirrored_var.dtype)
         return mirrored_var.assign_add(value)
 
@@ -967,7 +1111,7 @@ class MirroredVariableUpdateTest(test.TestCase):
 
       def model_fn():
         value = math_ops.cast(
-            ds_context.get_replica_context().replica_id_in_sync_group,
+            distribute_lib.get_replica_context().replica_id_in_sync_group,
             mirrored_var.dtype)
         return mirrored_var.assign_sub(value)
 
@@ -1287,7 +1431,7 @@ class MultiWorkerMirroredStrategyTestWithChief(
                                 {"TF_CONFIG": json.dumps(tf_config)}):
         strategy = mirrored_strategy.MirroredStrategy()
         if context.num_gpus() == 0:
-          self.assertIsInstance(strategy.extended._inferred_cross_device_ops,
+          self.assertIsInstance(strategy.extended._cross_device_ops,
                                 cross_device_ops_lib.ReductionToOneDevice)
       self.skipTest("b/130551176, run the following once fixed.")
       self._test_minimize_loss_graph(strategy, learning_rate=0.05)
@@ -1402,14 +1546,14 @@ class FunctionTest(test.TestCase, parameterized.TestCase):
 
 
 def _replica_id():
-  replica_id = ds_context.get_replica_context().replica_id_in_sync_group
+  replica_id = distribute_lib.get_replica_context().replica_id_in_sync_group
   if not isinstance(replica_id, ops.Tensor):
     replica_id = constant_op.constant(replica_id)
   return array_ops.identity(replica_id)
 
 
 def _replica_id_as_int():
-  replica_id = ds_context.get_replica_context().replica_id_in_sync_group
+  replica_id = distribute_lib.get_replica_context().replica_id_in_sync_group
   if isinstance(replica_id, ops.Tensor):
     replica_id = tensor_util.constant_value(replica_id)
   return replica_id

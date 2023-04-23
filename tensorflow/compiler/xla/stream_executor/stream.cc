@@ -289,7 +289,7 @@ tsl::Status Stream::RefreshStatus() {
   tsl::Status status = parent_->GetStatus(this);
   // We should not put the stream in an error state, just because the GetStatus
   // method is unimplemented.
-  if (status != tsl::Status(tsl::error::UNIMPLEMENTED,
+  if (status != tsl::Status(absl::StatusCode::kUnimplemented,
                             "GetStatus is not supported on this executor.")) {
     CheckStatus(status);
   }
@@ -333,7 +333,7 @@ Stream &Stream::ThenRecordEvent(Event *event) {
 
   tsl::Status status = parent_->RecordEvent(this, event);
   if (!status.ok()) {
-    LOG(ERROR) << "Error recording event in stream: " << status.error_message()
+    LOG(ERROR) << "Error recording event in stream: " << status.message()
                << "; not marking stream as bad, as the Event object may be "
                << "at fault. Monitor for further errors.";
   }
@@ -1117,8 +1117,7 @@ Stream &Stream::ThenWaitFor(Event *event) {
   if (ok()) {
     tsl::Status status = parent_->WaitForEvent(this, event);
     if (!status.ok()) {
-      LOG(ERROR) << "Error waiting for event in stream: "
-                 << status.error_message()
+      LOG(ERROR) << "Error waiting for event in stream: " << status.message()
                  << "; not marking stream as bad, as the Event object may be "
                  << "at fault. Monitor for further errors.";
     }
@@ -2534,7 +2533,7 @@ tsl::Status Stream::BlockHostUntilDone() {
     absl::MutexLock lock(&mu_);
     LOG(INFO) << status_.ToString();
     tsl::Status status = tsl::Status(
-        tsl::error::INTERNAL,
+        absl::StatusCode::kInternal,
         "stream did not block host until done; was already in an error state");
     LOG(INFO) << DebugStreamPointers() << " " << status;
     return status;

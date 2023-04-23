@@ -22,6 +22,7 @@ from tensorflow.python.framework import ops
 from tensorflow.python.framework import random_seed
 from tensorflow.python.framework import tensor_util
 from tensorflow.python.ops import array_ops
+from tensorflow.python.ops import control_flow_assert
 from tensorflow.python.ops import control_flow_ops
 from tensorflow.python.ops import gen_random_ops
 from tensorflow.python.ops import math_ops
@@ -294,7 +295,7 @@ def random_uniform(shape,
       raise ValueError("Must specify maxval for integer dtype %r" % dtype)
     maxval = 1
   with ops.name_scope(name, "random_uniform", [shape, minval, maxval]) as name:
-    shape = tensor_util.shape_tensor(shape)
+    shape = shape_util.shape_tensor(shape)
     # In case of [0,1) floating results, minval and maxval is unused. We do an
     # `is` comparison here since this is cheaper than isinstance or  __eq__.
     minval_is_zero = isinstance(minval, int) and minval == 0
@@ -318,7 +319,7 @@ def random_uniform(shape,
     # cross FuncGraph boundaries since that information is only available in
     # python. So we manually get the static shape using
     # `constant_value_as_shape` which *does* cross function boundaries.
-    tensor_util.maybe_set_static_shape(result, shape)
+    shape_util.maybe_set_static_shape(result, shape)
     return result
 
 
@@ -402,7 +403,7 @@ def random_crop(value, size, seed=None, name=None):
     value = ops.convert_to_tensor(value, name="value")
     size = ops.convert_to_tensor(size, dtype=dtypes.int32, name="size")
     shape = array_ops.shape(value)
-    check = control_flow_ops.Assert(
+    check = control_flow_assert.Assert(
         math_ops.reduce_all(shape >= size),
         ["Need value.shape >= size, got ", shape, size],
         summarize=1000)
@@ -455,7 +456,7 @@ def stateless_random_crop(value, size, seed, name=None):
     value = ops.convert_to_tensor(value, name="value")
     size = ops.convert_to_tensor(size, dtype=dtypes.int32, name="size")
     shape = array_ops.shape(value)
-    check = control_flow_ops.Assert(
+    check = control_flow_assert.Assert(
         math_ops.reduce_all(shape >= size),
         ["Need value.shape >= size, got ", shape, size],
         summarize=1000)
@@ -552,7 +553,7 @@ def _maybe_set_static_shape_helper(tensor, shape, postfix_tensor):
   if (not context.executing_eagerly() and
       ops.get_default_graph().building_function and
       not tensor.shape.is_fully_defined()):
-    shape = tensor_util.shape_tensor(shape)
+    shape = shape_util.shape_tensor(shape)
     const_shape = tensor_util.constant_value_as_shape(shape)
     postfix_tensor = ops.convert_to_tensor(postfix_tensor)
     tensor.set_shape(const_shape.concatenate(postfix_tensor.shape))

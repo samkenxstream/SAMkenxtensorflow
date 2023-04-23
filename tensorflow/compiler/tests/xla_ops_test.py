@@ -31,6 +31,7 @@ from tensorflow.python.framework import ops
 from tensorflow.python.framework import tensor_shape
 from tensorflow.python.framework import test_util
 from tensorflow.python.ops import array_ops
+from tensorflow.python.ops import array_ops_stack  # pylint: disable=g-direct-tensorflow-import
 from tensorflow.python.ops import stateless_random_ops
 from tensorflow.python.platform import googletest
 
@@ -573,6 +574,41 @@ class XlaOpsNumericalTest(xla_test.XLATestCase, parameterized.TestCase):
           args=(values_1, values_2),
           expected=(values_1, values_2))
 
+  @test_util.disable_mlir_bridge('Not supported yet')
+  def testScatter(self):
+    test_array = np.arange(9).astype(np.int32).reshape((3, 3))
+    scatter_indices = np.array([0, 2], dtype=np.int32)
+    updates = np.array([[10, 20, 30], [70, 80, 90]], dtype=np.int32)
+
+    dnums = xla_data_pb2.ScatterDimensionNumbers()
+    dnums.update_window_dims.append(1)
+    dnums.inserted_window_dims.append(0)
+    dnums.scatter_dims_to_operand_dims.append(0)
+    dnums.index_vector_dim = 1
+
+    add_numbers = function.Defun(np.int32, np.int32)(lambda x, y: x + y)
+
+    def test_fn(
+        scatter_input,
+        scatter_indices,
+        scatter_updates,
+    ):
+      return gen_xla_ops.xla_scatter(
+          scatter_input,
+          scatter_indices,
+          scatter_updates,
+          add_numbers,
+          dnums.SerializeToString(),
+          indices_are_sorted=False,
+      )
+
+    expected = np.array([[10, 21, 32], [3, 4, 5], [76, 87, 98]], dtype=np.int32)
+    self._assertOpOutputMatchesExpected(
+        test_fn,
+        args=(test_array, scatter_indices, updates),
+        expected=expected,
+    )
+
   def testSelectAndScatter(self):
     for dtype in set(self.numeric_types).intersection(
         set([dtypes.bfloat16.as_numpy_dtype, np.float32])):
@@ -822,7 +858,8 @@ class XlaOpsShapeInferenceTest(xla_test.XLATestCase, parameterized.TestCase):
       self.assertEqual(res.shape.as_list(), [1, 2, 4])
 
     # The first two dimension slice sizes are known
-    slice_sizes = array_ops.stack([1, 2, array_ops.placeholder(np.int32, [])])
+    slice_sizes = array_ops_stack.stack(
+        [1, 2, array_ops.placeholder(np.int32, [])])
     for a_shape in [(2, 3, 4), (None, 3, 4), None]:
       a = array_ops.placeholder(np.float32, shape=a_shape)
       res = xla.dynamic_slice(a, start, slice_sizes)

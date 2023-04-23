@@ -26,10 +26,10 @@ limitations under the License.
 #include "tensorflow/c/tf_status_internal.h"
 #include "tensorflow/c/tf_tensor.h"
 #include "tensorflow/c/tf_tensor_internal.h"
-#include "tensorflow/compiler/jit/xla_launch_util.h"
+#include "tensorflow/compiler/jit/variable_info.h"
+#include "tensorflow/compiler/jit/variable_info_util.h"
 #include "tensorflow/compiler/xla/pjrt/pjrt_c_api_client.h"
 #include "tensorflow/compiler/xla/pjrt/pjrt_client.h"
-#include "tensorflow/core/common_runtime/next_pluggable_device/next_pluggable_device.h"
 #include "tensorflow/core/common_runtime/next_pluggable_device/plugin_resource.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/platform/status.h"
@@ -44,13 +44,6 @@ TF_Device* TF_GetDevice(TF_OpKernelContext* ctx) {
   return reinterpret_cast<TF_Device*>(cc_ctx->device());
 }
 
-size_t TF_GetDeviceOrdinal(TF_Device* device) {
-  // TODO(chuanhao): make GetDeviceOrdinal a virtual member function in the base
-  // device class, instead of casting to `NextPluggableDevice`.
-  auto cc_device = reinterpret_cast<tensorflow::NextPluggableDevice*>(device);
-  return cc_device->GetDeviceOrdinal();
-}
-
 // --------------------------  Resource  ---------------------------------------
 void TF_CreatePluginResource(TF_OpKernelContext* ctx,
                              const char* container_name,
@@ -63,7 +56,7 @@ void TF_CreatePluginResource(TF_OpKernelContext* ctx,
   auto cc_status =
       cc_ctx->resource_manager()->Create<tensorflow::PluginResource>(
           container_name, plugin_resource_name, cc_resource_ptr);
-  Set_TF_Status_from_Status(status, cc_status);
+  tsl::Set_TF_Status_from_Status(status, cc_status);
 }
 
 void TF_LookupOrCreatePluginResource(
@@ -93,7 +86,7 @@ void TF_LookupOrCreatePluginResource(
   } else {
     *result_plugin_resource = nullptr;
   }
-  Set_TF_Status_from_Status(status, cc_status);
+  tsl::Set_TF_Status_from_Status(status, cc_status);
 }
 
 // -------------------------  VariableInfo  ------------------------------------
@@ -101,7 +94,7 @@ struct TF_VariableInfo {
   TF_VariableInfo() = delete;
   // TF_VariableInfo is constructed here by TensorFlow, and will be passed to
   // plugin as a opaque pointer. Plugin will need to call C APIs below to
-  // operate on TF_VaribleInfo (such as allocate temp tensor for the `var` held
+  // operate on TF_VariableInfo (such as allocate temp tensor for the `var` held
   // by the underlying tensorflow::VariableInfo.
   TF_VariableInfo(int index, const std::string& name, tensorflow::Var* var) {
     var_info = tensorflow::VariableInfo{index, name, var};
@@ -120,7 +113,7 @@ TF_VariableInfo* TF_CreateVariableInfoFromContext(TF_OpKernelContext* ctx,
     cc_status = tsl::errors::InvalidArgument(
         "Trying to obtain resource handle from Input[", index,
         "], which is not type DT_RESOURCE.");
-    Set_TF_Status_from_Status(status, cc_status);
+    tsl::Set_TF_Status_from_Status(status, cc_status);
     return nullptr;
   }
   const tensorflow::ResourceHandle& handle =
@@ -148,20 +141,20 @@ void TF_AllocateTempForVariableInfo(TF_OpKernelContext* ctx,
   tsl::Status cc_status;
   if (var_info == nullptr) {
     cc_status = tsl::errors::InvalidArgument("TF_VariableInfo is NULL.");
-    Set_TF_Status_from_Status(status, cc_status);
+    tsl::Set_TF_Status_from_Status(status, cc_status);
     return;
   }
   if (var_info->var_info.var() == nullptr) {
     cc_status = tsl::errors::InvalidArgument(
         "VariableInfo does not track a resource variable.");
-    Set_TF_Status_from_Status(status, cc_status);
+    tsl::Set_TF_Status_from_Status(status, cc_status);
     return;
   }
 
   cc_status = cc_ctx->allocate_temp(var_info->var_info.var()->tensor()->dtype(),
                                     var_info->var_info.var()->tensor()->shape(),
                                     var_info->var_info.var()->tensor());
-  Set_TF_Status_from_Status(status, cc_status);
+  tsl::Set_TF_Status_from_Status(status, cc_status);
 }
 
 TF_Tensor* TF_GetTensorFromVariableInfo(TF_VariableInfo* var_info,
@@ -169,20 +162,20 @@ TF_Tensor* TF_GetTensorFromVariableInfo(TF_VariableInfo* var_info,
   tsl::Status cc_status;
   if (var_info == nullptr) {
     cc_status = tsl::errors::InvalidArgument("TF_VariableInfo is NULL.");
-    Set_TF_Status_from_Status(status, cc_status);
+    tsl::Set_TF_Status_from_Status(status, cc_status);
     return nullptr;
   }
   if (var_info->var_info.var() == nullptr) {
     cc_status = tsl::errors::InvalidArgument(
         "VariableInfo does not track a resource variable.");
-    Set_TF_Status_from_Status(status, cc_status);
+    tsl::Set_TF_Status_from_Status(status, cc_status);
     return nullptr;
   }
 
   tensorflow::Tensor* tensor = var_info->var_info.var()->tensor();
   TF_Tensor* result_tensor =
       tensorflow::TF_TensorFromTensor(*tensor, &cc_status);
-  Set_TF_Status_from_Status(status, cc_status);
+  tsl::Set_TF_Status_from_Status(status, cc_status);
   return result_tensor;
 }
 
@@ -243,9 +236,12 @@ void TF_CoordinationServiceDeleteKeyValue(const char* key,
 }
 
 // ----------------------------  PJRT  -----------------------------------------
-void TF_CreateAndSetPjRtCApiClient(const char* device_type, TF_Status* status) {
+void TF_CreateAndSetPjRtCApiClient(const char* device_type, TF_Status* status,
+                                   PJRT_NamedValue* create_options,
+                                   int num_options) {
   tsl::StatusOr<std::unique_ptr<xla::PjRtClient>> pjrt_client =
-      xla::GetCApiClient(device_type);
+      xla::GetCApiClient(device_type, pjrt::ConvertFromPjRtNamedValueList(
+                                          create_options, num_options));
   if (!pjrt_client.ok()) {
     tensorflow::Set_TF_Status_from_Status(status, pjrt_client.status());
     return;
@@ -258,7 +254,7 @@ void TF_CreateAndSetPjRtCApiClient(const char* device_type, TF_Status* status) {
 
 PJRT_Client* TF_GetPjRtCClient(const char* device_type, TF_Status* status) {
   tsl::StatusOr<xla::PjRtClient*> pjrt_client =
-      tensorflow::GetOrCreatePjRtClient(tensorflow::DeviceType(device_type));
+      tensorflow::GetPjRtClient(tensorflow::DeviceType(device_type));
   if (!pjrt_client.ok()) {
     tensorflow::Set_TF_Status_from_Status(status, pjrt_client.status());
     return nullptr;
@@ -312,7 +308,7 @@ void TF_CreatePjRtBuffer(TF_Tensor* c_tensor, PJRT_Buffer* c_buffer,
     return;
   }
   auto pjrt_client =
-      tensorflow::GetOrCreatePjRtClient(tensorflow::DeviceType(device_type));
+      tensorflow::GetPjRtClient(tensorflow::DeviceType(device_type));
   if (!pjrt_client.ok()) {
     tensorflow::Set_TF_Status_from_Status(status, pjrt_client.status());
     return;

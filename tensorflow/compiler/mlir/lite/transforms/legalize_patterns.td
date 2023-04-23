@@ -29,10 +29,10 @@ def DenseElementsAttr : ElementsAttrBase<
   "non-opaque constant tensor">;
 
 def F32ElementsAttr : ElementsAttrBase<
-  CPred<"$_self.cast<ElementsAttr>().getType().getElementType().isF32()">, "float constant tensor">;
+  CPred<"$_self.cast<ElementsAttr>().getShapedType().getElementType().isF32()">, "float constant tensor">;
 
 def Int64ElementsAttr : ElementsAttrBase<
-  CPred<"$_self.cast<ElementsAttr>().getType().getElementType().isInteger(64)">, "Int 64 constant tensor">;
+  CPred<"$_self.cast<ElementsAttr>().getShapedType().getElementType().isInteger(64)">, "Int 64 constant tensor">;
 
 // Extract the ith int element from an ArrayAttr $0 as an 32-bit IntegerAttr
 // with builder.
@@ -576,6 +576,14 @@ def LegalizeXlaDynamicUpdateSlice : Pat<
 def LegalizeAtan2 : Pat<(TF_Atan2Op $y, $x), (TFL_Atan2Op $y, $x)>;
 
 def LegalizeSign : Pat<(TF_SignOp $x), (TFL_SignOp $x)>;
+
+def LegalizeBitcast : Pat<(TF_BitcastOp $x), (TFL_BitcastOp $x)>;
+
+def LegalizeBitwiseXor : Pat<(TF_BitwiseXorOp $l, $r),
+                             (TFL_BitwiseXorOp $l, $r)>;
+
+def LegalizeRightShift : Pat<(TF_RightShiftOp $l, $r),
+                             (TFL_RightShiftOp $l, $r)>;
 
 // =============================================================================
 // Training OPs

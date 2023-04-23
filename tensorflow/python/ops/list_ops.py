@@ -293,14 +293,18 @@ def _TensorListSetItemGrad(op, dlist):
   """Gradient function for TensorListSetItem."""
   input_list, index, item = op.inputs
   list_grad = gen_list_ops.tensor_list_set_item(
-      dlist, index=index, item=array_ops.zeros_like(item))
+      dlist, index=index, item=array_ops.zeros_like(item)
+  )
   index_grad = None
   element_grad = tensor_list_get_item(
       dlist,
       index,
       element_shape=array_ops.shape(item),
-      element_dtype=item.dtype)
-  if op.get_attr("resize_if_index_out_of_bounds"):
+      element_dtype=item.dtype,
+  )
+  if op.get_attr(
+      "resize_if_index_out_of_bounds"
+  ):
     input_list_size = gen_list_ops.tensor_list_length(input_list)
     list_grad = gen_list_ops.tensor_list_resize(list_grad, input_list_size)
   return list_grad, index_grad, element_grad

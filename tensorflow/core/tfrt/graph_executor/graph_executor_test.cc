@@ -34,8 +34,8 @@ limitations under the License.
 #include "tensorflow/core/platform/statusor.h"
 #include "tensorflow/core/protobuf/rewriter_config.pb.h"
 #include "tensorflow/core/tfrt/saved_model/saved_model_testutil.h"
-#include "tensorflow/core/tfrt/tpu/tpu_resources.h"  // NOLINT(unused-includes): For tfrt::tpu::TpuModelResource
 #include "tensorflow/tsl/lib/core/status_test_util.h"
+#include "tensorflow/tsl/platform/status.h"
 #include "tensorflow/tsl/platform/statusor.h"
 #include "tfrt/cpp_tests/test_util.h""  // from @tf_runtime
 #include "tfrt/tensor/dense_host_tensor.h"  // from @tf_runtime
@@ -44,7 +44,7 @@ namespace tensorflow {
 namespace tfrt_stub {
 namespace {
 
-class GraphExecutorTest : public grappler::GrapplerTest {};
+class GraphExecutorTest : public ::testing::TestWithParam<bool> {};
 
 tensorflow::Status GetSimpleGraphDef(GraphDef& graph_def) {
   auto scope = tensorflow::Scope::NewRootScope().WithDevice("/device:CPU:0");
@@ -64,21 +64,21 @@ std::unique_ptr<mlrt::KernelRegistry> GetKernelRegistry() {
   return kernel_registry;
 }
 
-TEST_F(GraphExecutorTest, Vanilla) {
+TEST_P(GraphExecutorTest, Vanilla) {
   GraphDef graph_def;
   TF_ASSERT_OK(GetSimpleGraphDef(graph_def));
 
   auto runtime = DefaultTfrtRuntime(/*num_threads=*/1);
   GraphExecutor::Options options(runtime.get());
+  options.enable_mlrt = GetParam();
+
   TF_ASSERT_OK_AND_ASSIGN(
       auto fallback_state,
       tensorflow::tfrt_stub::FallbackState::Create(
           CreateDefaultSessionOptions(options), graph_def.library()))
-  auto tpu_model_resource = std::make_unique<tfrt::tpu::TpuModelResource>();
   TF_ASSERT_OK_AND_ASSIGN(
       auto graph_executor,
-      GraphExecutor::Create(std::move(options), *fallback_state,
-                            tpu_model_resource.get(), graph_def,
+      GraphExecutor::Create(std::move(options), *fallback_state, graph_def,
                             GetKernelRegistry()));
 
   // Set input 'x' to [[1, 1, 1]]
@@ -97,23 +97,22 @@ TEST_F(GraphExecutorTest, Vanilla) {
               ::testing::ElementsAreArray({2}));
 }
 
-TEST_F(GraphExecutorTest, BasicWithOnlineCostAnalysis) {
+TEST_P(GraphExecutorTest, BasicWithOnlineCostAnalysis) {
   GraphDef graph_def;
   TF_ASSERT_OK(GetSimpleGraphDef(graph_def));
 
   auto runtime = DefaultTfrtRuntime(/*num_threads=*/1);
   GraphExecutor::Options options(runtime.get());
   options.enable_online_cost_analysis = true;
+  options.enable_mlrt = GetParam();
 
   TF_ASSERT_OK_AND_ASSIGN(
       auto fallback_state,
       tensorflow::tfrt_stub::FallbackState::Create(
           CreateDefaultSessionOptions(options), graph_def.library()));
-  auto tpu_model_resource = std::make_unique<tfrt::tpu::TpuModelResource>();
   TF_ASSERT_OK_AND_ASSIGN(
       auto graph_executor,
-      GraphExecutor::Create(std::move(options), *fallback_state,
-                            tpu_model_resource.get(), graph_def,
+      GraphExecutor::Create(options, *fallback_state, graph_def,
                             GetKernelRegistry()));
 
   // Set input 'x' to [[1, 1, 1]]
@@ -142,15 +141,18 @@ TEST_F(GraphExecutorTest, BasicWithOnlineCostAnalysis) {
               ::testing::ElementsAreArray({2}));
 }
 
+INSTANTIATE_TEST_SUITE_P(GraphExecutorTestSuite, GraphExecutorTest,
+                         ::testing::Bool());
+
 TEST_F(GraphExecutorTest, DoOnlineCostAnalysisExactlyOnce) {
   GraphExecutor::LoadedClientGraph loaded_client_graph_0(
-      "name0", /*resource_context=*/nullptr, /*mlir_context=*/nullptr,
-      /*tfrt_mlir=*/{}, /*bef_context=*/nullptr, /*bytecode_buffer=*/{},
-      /*bytecode_executable=*/nullptr);
+      "name0", /*graph_executor=*/nullptr, /*mlir_context=*/nullptr,
+      /*tf_mlir_with_op_keys=*/{}, /*tfrt_mlir=*/{},
+      /*executable_context=*/nullptr);
   GraphExecutor::LoadedClientGraph loaded_client_graph_1(
-      "name1", /*resource_context=*/nullptr, /*mlir_context=*/nullptr,
-      /*tfrt_mlir=*/{}, /*bef_context=*/nullptr, /*bytecode_buffer=*/{},
-      /*bytecode_executable=*/nullptr);
+      "name1", /*graph_executor=*/nullptr, /*mlir_context=*/nullptr,
+      /*tf_mlir_with_op_keys=*/{}, /*tfrt_mlir=*/{},
+      /*executable_context=*/nullptr);
 
   // For each `LoadedClientGraph`, `MaybeCreateCostRecorder()` only returns a
   // cost recorder for once.
@@ -183,11 +185,9 @@ TEST_F(GraphExecutorTest, Extend) {
   TF_ASSERT_OK_AND_ASSIGN(auto fallback_state,
                           tensorflow::tfrt_stub::FallbackState::Create(
                               session_options, graph_def.library()));
-  auto tpu_model_resource = std::make_unique<tfrt::tpu::TpuModelResource>();
   TF_ASSERT_OK_AND_ASSIGN(
       auto graph_executor,
-      GraphExecutor::Create(std::move(options), *fallback_state,
-                            tpu_model_resource.get(), graph_def,
+      GraphExecutor::Create(std::move(options), *fallback_state, graph_def,
                             GetKernelRegistry()));
 
   GraphDef extension;
@@ -228,11 +228,9 @@ TEST_F(GraphExecutorTest, DisableCompilation) {
       auto fallback_state,
       tensorflow::tfrt_stub::FallbackState::Create(
           CreateDefaultSessionOptions(options), graph_def.library()));
-  tfrt::tpu::TpuModelResource tpu_model_resource;
   TF_ASSERT_OK_AND_ASSIGN(
       auto graph_executor,
-      GraphExecutor::Create(std::move(options), *fallback_state,
-                            &tpu_model_resource, graph_def,
+      GraphExecutor::Create(std::move(options), *fallback_state, graph_def,
                             GetKernelRegistry()));
 
   // Set input 'x' to [[1, 1, 1]]
@@ -250,7 +248,7 @@ TEST_F(GraphExecutorTest, DisableCompilation) {
                                     /*target_tensor_names=*/{}, &outputs);
   ASSERT_FALSE(status.ok());
   EXPECT_THAT(
-      status.error_message(),
+      status.ToString(),
       ::testing::HasSubstr("GraphExecutor: compilation is disabled in "
                            "execution but the compiled graph is not found"));
 
@@ -274,11 +272,9 @@ TEST_F(GraphExecutorTest, SyncExecute) {
       auto fallback_state,
       tensorflow::tfrt_stub::FallbackState::Create(
           CreateDefaultSessionOptions(options), graph_def.library()));
-  auto tpu_model_resource = std::make_unique<tfrt::tpu::TpuModelResource>();
   TF_ASSERT_OK_AND_ASSIGN(
       auto graph_executor,
-      GraphExecutor::Create(std::move(options), *fallback_state,
-                            tpu_model_resource.get(), graph_def,
+      GraphExecutor::Create(std::move(options), *fallback_state, graph_def,
                             GetKernelRegistry()));
 
   std::vector<mlrt::Value> inputs;

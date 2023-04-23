@@ -29,6 +29,7 @@ limitations under the License.
 #include <unistd.h>
 #endif
 #include "absl/functional/any_invocable.h"
+#include "absl/status/status.h"
 #include "absl/strings/ascii.h"
 #include "absl/strings/numbers.h"
 #include "absl/strings/str_cat.h"
@@ -719,9 +720,7 @@ bool GpuExecutor::HostCallback(Stream* stream,
                                       InternalHostCallback, callback_ptr);
 }
 
-/* static */ void GpuExecutor::InternalHostCallback(CUstream stream,
-                                                    CUresult status,
-                                                    void* data) {
+/* static */ void GpuExecutor::InternalHostCallback(void* data) {
   auto* callback = reinterpret_cast<absl::AnyInvocable<void() &&>*>(data);
   std::move (*callback)();
   delete callback;
@@ -745,7 +744,7 @@ tsl::Status GpuExecutor::WaitForEvent(Stream* stream, Event* event) {
     return ::tsl::OkStatus();
   } else {
     return tsl::Status(
-        tsl::error::INTERNAL,
+        absl::StatusCode::kInternal,
         absl::StrFormat("error recording waiting for CUDA event on stream %p",
                         stream));
   }
@@ -814,7 +813,7 @@ blas::BlasSupport* GpuExecutor::CreateBlas() {
                                                         plugin_config_.blas());
   if (!status.ok()) {
     LOG(ERROR) << "Unable to retrieve BLAS factory: "
-               << status.status().error_message();
+               << status.status().message();
     return nullptr;
   }
 
@@ -828,7 +827,7 @@ dnn::DnnSupport* GpuExecutor::CreateDnn() {
                                                        plugin_config_.dnn());
   if (!status.ok()) {
     LOG(ERROR) << "Unable to retrieve DNN factory: "
-               << status.status().error_message();
+               << status.status().message();
     return nullptr;
   }
 
@@ -842,7 +841,7 @@ fft::FftSupport* GpuExecutor::CreateFft() {
                                                        plugin_config_.fft());
   if (!status.ok()) {
     LOG(ERROR) << "Unable to retrieve FFT factory: "
-               << status.status().error_message();
+               << status.status().message();
     return nullptr;
   }
 
@@ -856,7 +855,7 @@ rng::RngSupport* GpuExecutor::CreateRng() {
                                                        plugin_config_.rng());
   if (!status.ok()) {
     LOG(ERROR) << "Unable to retrieve RNG factory: "
-               << status.status().error_message();
+               << status.status().message();
     return nullptr;
   }
 

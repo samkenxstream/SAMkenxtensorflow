@@ -23,6 +23,17 @@ from tensorflow.core.function.trace_type import serialization
 from tensorflow.core.function.trace_type import util
 from tensorflow.python.types import trace
 
+# Register the TraceType of Tensor (aka TensorSpec) to avoid cyclic dependency.
+TENSOR = None
+
+
+def register_tensor_type(tensor_type):
+  global TENSOR
+  if not TENSOR:
+    TENSOR = tensor_type
+  else:
+    raise AssertionError("Tensor type is already registered.")
+
 
 class Literal(trace.TraceType, serialization.Serializable):
   """Represents a Literal type like bool, int or string."""
@@ -82,7 +93,7 @@ class Literal(trace.TraceType, serialization.Serializable):
     raise ValueError("Can not serialize Literal of type " +
                      type(self.value).__name__)
 
-  def placeholder_value(self, placeholder_context=None) -> Any:
+  def placeholder_value(self, placeholder_context) -> Any:
     # TODO(b/263505796): Remove this check when a range's placeholder output
     # is expected to be a range and not a list.
     if isinstance(self.value, range):
@@ -123,7 +134,7 @@ class Weakref(trace.TraceType):
       self, types: Sequence[trace.TraceType]) -> Optional["Weakref"]:
     return self if all(self == other for other in types) else None
 
-  def placeholder_value(self, placeholder_context=None) -> Any:
+  def placeholder_value(self, placeholder_context) -> Any:
     return self._ref()
 
   def _to_tensors(self, value: Any) -> Any:
@@ -393,8 +404,8 @@ class NamedTuple(trace.TraceType, serialization.Serializable):
 
   def _cast(self, value: Any, casting_context) -> Any:
     # Value must have same attributes with the TraceType
-    assert (
-        isinstance(value, self._placeholder_type)  # pylint: disable=unidiomatic-typecheck
+    assert util.is_namedtuple(
+        value
     ), f"Cannot cast {value!r} to type {self._placeholder_type!r}."
     cast_value = {}
     value_dict = value._asdict()

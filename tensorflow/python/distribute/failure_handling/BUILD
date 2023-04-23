@@ -19,6 +19,7 @@ py_library(
         "//tensorflow/python:lib",
         "//tensorflow/python:variables",
         "//tensorflow/python/checkpoint",
+        "//tensorflow/python/checkpoint:checkpoint_context",
         "//tensorflow/python/checkpoint:checkpoint_management",
         "//tensorflow/python/distribute:multi_worker_util",
         "//tensorflow/python/distribute/failure_handling:check_preemption_py",
@@ -28,9 +29,11 @@ py_library(
         "//tensorflow/python/framework:errors",
         "//tensorflow/python/framework:ops",
         "//tensorflow/python/lib/io:lib",
-        "//tensorflow/python/platform",
+        "//tensorflow/python/platform:gfile",
+        "//tensorflow/python/platform:tf_logging",
         "//tensorflow/python/util:tf_decorator",
         "//tensorflow/python/util:tf_export",
+        "//tensorflow/tools/docs:doc_controls",
     ],
 )
 
@@ -41,6 +44,7 @@ py_library(
     ],
     srcs_version = "PY3",
     deps = [
+        "//tensorflow/python/platform:tf_logging",
     ],
 )
 
@@ -51,6 +55,8 @@ py_library(
     deps = [
         ":failure_handling_util",
         "//tensorflow/python/eager:context",
+        "//tensorflow/python/eager:monitoring",
+        "//tensorflow/python/framework:errors",
         "//tensorflow/python/util:tf_export",
         "@absl_py//absl/logging",
     ],
@@ -69,6 +75,7 @@ tf_py_test(
         ":failure_handling_lib",
         "//tensorflow/python:variables",
         "//tensorflow/python/checkpoint",
+        "//tensorflow/python/checkpoint:checkpoint_context",
         "//tensorflow/python/checkpoint:checkpoint_management",
         "//tensorflow/python/distribute:collective_all_reduce_strategy",
         "//tensorflow/python/distribute:combinations",
@@ -81,8 +88,9 @@ tf_py_test(
         "//tensorflow/python/framework:constant_op",
         "//tensorflow/python/framework:errors",
         "//tensorflow/python/module",
-        "//tensorflow/python/platform",
         "//tensorflow/python/platform:client_testlib",
+        "//tensorflow/python/platform:gfile",
+        "//tensorflow/python/platform:tf_logging",
         "@absl_py//absl/testing:parameterized",
     ],
 )
@@ -94,7 +102,6 @@ tf_py_test(
     tags = [
         "no_pip",  # TODO(b/266520226)
         "noasan",  # TODO(b/226154233): Flaky test
-        "nomsan",  # TODO(b/226154233): Flaky test
     ],
     deps = [
         ":failure_handling_lib",
@@ -104,6 +111,9 @@ tf_py_test(
         "//tensorflow/python/distribute:multi_worker_test_base",
         "//tensorflow/python/distribute:strategy_combinations",
         "//tensorflow/python/distribute:test_util",
+        "//tensorflow/python/platform:client_testlib",
+        "//tensorflow/python/platform:gfile",
+        "//tensorflow/python/platform:tf_logging",
     ],
 )
 

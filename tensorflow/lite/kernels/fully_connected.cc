@@ -19,8 +19,10 @@ limitations under the License.
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <vector>
 
 #include "tensorflow/lite/core/c/builtin_op_data.h"
+#include "tensorflow/lite/core/c/c_api_types.h"
 #include "tensorflow/lite/core/c/common.h"
 #include "tensorflow/lite/kernels/cpu_backend_context.h"
 #include "tensorflow/lite/kernels/internal/optimized/optimized_ops.h"
@@ -336,7 +338,8 @@ TfLiteStatus PrepareImpl(TfLiteContext* context, TfLiteNode* node) {
   // quantized values prior to multiplication by the scaling factor.
   const bool is_hybrid =
       (input->type == kTfLiteFloat32 &&
-       (filter->type == kTfLiteUInt8 || filter->type == kTfLiteInt8));
+       (filter->type == kTfLiteUInt8 || filter->type == kTfLiteInt8 ||
+        filter->type == kTfLiteInt4));
   const bool is_sparse = filter->sparsity != nullptr;
   if (is_hybrid) {
     TfLiteIntArrayFree(node->temporaries);
@@ -554,7 +557,18 @@ TfLiteStatus EvalHybridDense(
     row_sums_ptr = GetTensorData<int32_t>(row_sums);
   }
   int8_t* quant_data = GetTensorData<int8_t>(input_quantized);
-  const int8_t* filter_data = GetTensorData<int8_t>(filter);
+  const int8_t* filter_data = nullptr;
+  std::unique_ptr<int8_t[]> unpacked_filter_data = nullptr;
+  if (filter->type == kTfLiteInt4) {
+    const size_t bytes_unpacked = filter->bytes * 2;
+    unpacked_filter_data = std::make_unique<int8_t[]>(bytes_unpacked);
+    tflite::tensor_utils::UnpackDenseInt4IntoInt8(
+        GetTensorData<int8_t>(filter), GetTensorShape(filter).FlatSize(),
+        unpacked_filter_data.get());
+    filter_data = unpacked_filter_data.get();
+  } else {
+    filter_data = GetTensorData<int8_t>(filter);
+  }
   const float* input_ptr = GetTensorData<float>(input);
   tensor_utils::BatchQuantizeFloats(
       input_ptr, batch_size, input_size, quant_data, scaling_factors_ptr,
@@ -807,28 +821,32 @@ void FullyConnectedInt8(const OpData* data, const TfLiteTensor* input,
   op_params.lhs_cacheable = IsConstantTensor(filter);
   op_params.rhs_cacheable = IsConstantTensor(input);
 
+  const int8_t* filter_data;
+  std::unique_ptr<int8_t[]> unpacked_filter_data = nullptr;
+
   if (filter->type == kTfLiteInt4) {
     const size_t bytes_unpacked = filter->bytes * 2;
-    auto unpacked_filter_data = std::make_unique<int8_t[]>(bytes_unpacked);
-    reference_integer_ops::FullyConnectedWithPackedInt4Weights(
-        op_params, GetTensorShape(input), GetTensorData<int8_t>(input),
-        GetTensorShape(filter), GetTensorData<int8_t>(filter),
-        unpacked_filter_data.get(), GetTensorShape(bias),
-        GetTensorData<int32_t>(bias), GetTensorShape(output),
-        GetTensorData<int8_t>(output));
-  } else if (kernel_type == kReference) {
+    unpacked_filter_data = std::make_unique<int8_t[]>(bytes_unpacked);
+    tflite::tensor_utils::UnpackDenseInt4IntoInt8(
+        GetTensorData<int8_t>(filter), GetTensorShape(filter).FlatSize(),
+        unpacked_filter_data.get());
+    filter_data = unpacked_filter_data.get();
+  } else {
+    filter_data = GetTensorData<int8>(filter);
+  }
+
+  if (kernel_type == kReference) {
     reference_integer_ops::FullyConnected(
         op_params, GetTensorShape(input), GetTensorData<int8_t>(input),
-        GetTensorShape(filter), GetTensorData<int8_t>(filter),
-        GetTensorShape(bias), GetTensorData<int32_t>(bias),
-        GetTensorShape(output), GetTensorData<int8_t>(output));
+        GetTensorShape(filter), filter_data, GetTensorShape(bias),
+        GetTensorData<int32_t>(bias), GetTensorShape(output),
+        GetTensorData<int8_t>(output));
   } else {
     optimized_integer_ops::FullyConnected(
         op_params, GetTensorShape(input), GetTensorData<int8_t>(input),
-        GetTensorShape(filter), GetTensorData<int8_t>(filter),
-        GetTensorShape(bias), GetTensorData<int32_t>(bias),
-        GetTensorShape(output), GetTensorData<int8_t>(output),
-        cpu_backend_context);
+        GetTensorShape(filter), filter_data, GetTensorShape(bias),
+        GetTensorData<int32_t>(bias), GetTensorShape(output),
+        GetTensorData<int8_t>(output), cpu_backend_context);
   }
 }
 
@@ -1038,19 +1056,10 @@ TfLiteStatus EvalQuantized(TfLiteContext* context, TfLiteNode* node,
                 "Invalid quantized and sparse fully-connected format.");
             return kTfLiteError;
           }
-          if (filter->type == kTfLiteInt4) {
-            const size_t bytes_unpacked = filter->bytes * 2;
-            auto unpacked_filter_data =
-                std::make_unique<int8_t[]>(bytes_unpacked);
-            reference_integer_ops::FullyConnectedWithPackedInt4Weights(
-                op_params, GetTensorShape(input), GetTensorData<int8_t>(input),
-                GetTensorShape(filter), GetTensorData<int8_t>(filter),
-                unpacked_filter_data.get(), GetTensorShape(bias),
-                GetTensorData<int32_t>(bias), GetTensorShape(output),
-                GetTensorData<int8_t>(output));
-          } else if (sparsity.dim_metadata_size ==
-                         kDimMetadataSizeBlockSparse &&
-                     sparsity.dim_metadata[2].dense_size == 16) {
+          // Int4 support for sparse filter tensor is currently not supported
+          TF_LITE_ENSURE(context, filter->type != kTfLiteInt4);
+          if (sparsity.dim_metadata_size == kDimMetadataSizeBlockSparse &&
+              sparsity.dim_metadata[2].dense_size == 16) {
             // Block sparse with block size of 1x16.
             optimized_ops::FullyConnectedSparseWeight1x16(
                 sparsity, op_params, input_shape, GetTensorData<int8_t>(input),

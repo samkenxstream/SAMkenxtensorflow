@@ -25,7 +25,9 @@ limitations under the License.
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <type_traits>
+#include <utility>
 
 #include "absl/base/thread_annotations.h"
 #include "absl/functional/any_invocable.h"
@@ -421,6 +423,20 @@ class Stream {
     return tsl::errors::Unimplemented("DNN library is not found.");
   }
 
+  tsl::Status CudnnReorderConvolutionFilterAndBias(
+      const dnn::FilterDescriptor &filter_descriptor,
+      const DeviceMemory<int8_t> &filter_input,
+      DeviceMemory<int8_t> *filter_output,
+      std::optional<const DeviceMemory<float>> bias_input,
+      std::optional<DeviceMemory<float>> bias_output) {
+    if (dnn::DnnSupport *dnn = parent_->AsDnn()) {
+      return dnn->CudnnReorderConvolutionFilterAndBias(
+          this, filter_descriptor, filter_input, filter_output,
+          std::move(bias_input), std::move(bias_output));
+    }
+    return tsl::errors::Unimplemented("DNN library is not found.");
+  }
+
   tsl::StatusOr<std::unique_ptr<const dnn::ConvRunner>> ConvolveRunnerFromDesc(
       const dnn::AlgorithmDesc &algorithm_desc, dnn::ConvolutionKind kind,
       dnn::DataType element_type, dnn::DataType output_type,
@@ -458,6 +474,87 @@ class Stream {
         conv_input_scale, side_input_scale, leakyrelu_alpha, input_descriptor,
         filter_descriptor, bias_descriptor, output_descriptor,
         convolution_descriptor, activation_mode);
+  }
+
+  tsl::StatusOr<std::unique_ptr<const dnn::FusedMHASoftmaxRunner>>
+  FusedMHASoftmaxRunnerFromDesc(
+      const dnn::AlgorithmDesc &algorithm_desc, dnn::FusedMHAKind kind,
+      const dnn::MatmulTensorDescriptor &bmm1_lhs_descriptor,
+      const dnn::MatmulTensorDescriptor &bmm1_rhs_descriptor,
+      const dnn::MatmulTensorDescriptor &bmm2_rhs_descriptor,
+      const dnn::MatmulTensorDescriptor &intermediate_bmm2_lhs_descriptor,
+      const dnn::TensorDescriptor &output_descriptor,
+      std::optional<double> dropout_rate, std::optional<int64_t> seed) {
+    dnn::DnnSupport *dnn_support = parent_->AsDnn();
+    if (!dnn_support) {
+      return tsl::errors::Unimplemented("DNN library is not found.");
+    }
+    return dnn_support->FusedMHASoftmaxRunnerFromDesc(
+        this, algorithm_desc, kind, bmm1_lhs_descriptor, bmm1_rhs_descriptor,
+        bmm2_rhs_descriptor, intermediate_bmm2_lhs_descriptor,
+        output_descriptor, dropout_rate, seed);
+  }
+
+  tsl::StatusOr<std::unique_ptr<const dnn::FusedMHAMaskRunner>>
+  FusedMHAScaleMaskSoftmaxRunnerFromDesc(
+      const dnn::AlgorithmDesc &algorithm_desc, dnn::FusedMHAKind kind,
+      const dnn::MatmulTensorDescriptor &bmm1_lhs_descriptor,
+      const dnn::MatmulTensorDescriptor &bmm1_rhs_descriptor,
+      const dnn::MatmulTensorDescriptor &bmm2_rhs_descriptor,
+      const dnn::MatmulTensorDescriptor &intermediate_bmm2_lhs_descriptor,
+      const dnn::TensorDescriptor &output_descriptor,
+      const dnn::TensorDescriptor &mask_descriptor, double scale,
+      std::optional<double> dropout_rate, std::optional<int64_t> seed) {
+    dnn::DnnSupport *dnn_support = parent_->AsDnn();
+    if (!dnn_support) {
+      return tsl::errors::Unimplemented("DNN library is not found.");
+    }
+    return dnn_support->FusedMHAScaleMaskSoftmaxRunnerFromDesc(
+        this, algorithm_desc, kind, bmm1_lhs_descriptor, bmm1_rhs_descriptor,
+        bmm2_rhs_descriptor, intermediate_bmm2_lhs_descriptor,
+        output_descriptor, mask_descriptor, scale, dropout_rate, seed);
+  }
+
+  tsl::StatusOr<std::unique_ptr<const dnn::FusedMHABiasMaskRunner>>
+  FusedMHAScaleBiasMaskSoftmaxRunnerFromDesc(
+      const dnn::AlgorithmDesc &algorithm_desc, dnn::FusedMHAKind kind,
+      const dnn::MatmulTensorDescriptor &bmm1_lhs_descriptor,
+      const dnn::MatmulTensorDescriptor &bmm1_rhs_descriptor,
+      const dnn::MatmulTensorDescriptor &bmm2_rhs_descriptor,
+      const dnn::MatmulTensorDescriptor &intermediate_bmm2_lhs_descriptor,
+      const dnn::TensorDescriptor &output_descriptor,
+      const dnn::TensorDescriptor &mask_descriptor,
+      const dnn::TensorDescriptor &bias_descriptor, double scale,
+      std::optional<double> dropout_rate, std::optional<int64_t> seed) {
+    dnn::DnnSupport *dnn_support = parent_->AsDnn();
+    if (!dnn_support) {
+      return tsl::errors::Unimplemented("DNN library is not found.");
+    }
+    return dnn_support->FusedMHAScaleBiasMaskSoftmaxRunnerFromDesc(
+        this, algorithm_desc, kind, bmm1_lhs_descriptor, bmm1_rhs_descriptor,
+        bmm2_rhs_descriptor, intermediate_bmm2_lhs_descriptor,
+        output_descriptor, mask_descriptor, bias_descriptor, scale,
+        dropout_rate, seed);
+  }
+
+  tsl::StatusOr<std::unique_ptr<const dnn::FusedMHABiasRunner>>
+  FusedMHAScaleBiasSoftmaxRunnerFromDesc(
+      const dnn::AlgorithmDesc &algorithm_desc, dnn::FusedMHAKind kind,
+      const dnn::MatmulTensorDescriptor &bmm1_lhs_descriptor,
+      const dnn::MatmulTensorDescriptor &bmm1_rhs_descriptor,
+      const dnn::MatmulTensorDescriptor &bmm2_rhs_descriptor,
+      const dnn::MatmulTensorDescriptor &intermediate_bmm2_lhs_descriptor,
+      const dnn::TensorDescriptor &output_descriptor,
+      const dnn::TensorDescriptor &bias_descriptor, double scale,
+      std::optional<double> dropout_rate, std::optional<int64_t> seed) {
+    dnn::DnnSupport *dnn_support = parent_->AsDnn();
+    if (!dnn_support) {
+      return tsl::errors::Unimplemented("DNN library is not found.");
+    }
+    return dnn_support->FusedMHAScaleBiasSoftmaxRunnerFromDesc(
+        this, algorithm_desc, kind, bmm1_lhs_descriptor, bmm1_rhs_descriptor,
+        bmm2_rhs_descriptor, intermediate_bmm2_lhs_descriptor,
+        output_descriptor, bias_descriptor, scale, dropout_rate, seed);
   }
 
   Stream &ThenSeparableConvolve(
